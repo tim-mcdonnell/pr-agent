@@ -107,9 +107,7 @@ SECTION_DOCS = {
         "../usage-guide/automations_and_usage.md#bitbucket-server-webhook",
     ),
     "jira": ("Ticket context", "../core-abilities/fetching_ticket_context.md#jira-integration"),
-    "litellm": ("Changing a model", "../usage-guide/changing_a_model.md#changing-a-model-in-pr-agent"),
-    "bedrock": ("Amazon Bedrock", "../usage-guide/changing_a_model.md#amazon-bedrock"),
-    "openrouter": ("OpenRouter", "../usage-guide/changing_a_model.md#openrouter"),
+    "claude_code": ("Claude Code integration", "../usage-guide/claude_agent_sdk.md#read-only-repository-exploration"),
     "model_routing": (
         "Model routing",
         "../usage-guide/changing_a_model.md#routing-small-pull-requests-to-a-cheaper-model",

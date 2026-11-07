@@ -1,10 +1,9 @@
 import asyncio
 
-import httpx
-import openai
 import pytest
 from jinja2 import UndefinedError
 
+from pr_agent.algo.ai_handlers.claude_agent_sdk_handler import ClaudeAgentSDKError
 from pr_agent.algo.pr_processing import FallbackEligibleError, retry_with_fallback_models
 from pr_agent.algo.run_details import get_run_details, init_run_details
 from pr_agent.algo.utils import ModelType
@@ -360,6 +359,7 @@ def test_recording_successful_model_does_not_trigger_fallback_retry(monkeypatch)
     UndefinedError("missing prompt variable"),
     ValueError("unclassified local value"),
     RuntimeError("unclassified local runtime"),
+    ClaudeAgentSDKError("Claude Code reported authentication_failed for claude-opus-5-5"),
 ])
 def test_local_errors_propagate_without_billing_fallback(error):
     snapshot = _snapshot_settings()
@@ -385,8 +385,9 @@ def test_local_errors_propagate_without_billing_fallback(error):
 
 
 @pytest.mark.parametrize("error", [
-    openai.APIError("provider failed", request=httpx.Request("POST", "https://example.invalid"), body=None),
+    FallbackEligibleError("Claude Code failed for claude-opus-5-5: provider failed"),
     TimeoutError("provider timed out"),
+    TimeoutError(),
 ])
 def test_provider_errors_and_timeouts_remain_fallback_eligible(error):
     snapshot = _snapshot_settings()

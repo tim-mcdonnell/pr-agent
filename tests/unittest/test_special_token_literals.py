@@ -1,10 +1,16 @@
+from math import ceil
 from unittest.mock import Mock
 
 import pytest
 
 from pr_agent.algo.skills_loader import Skill, format_skills_context
 from pr_agent.algo.token_budget import clip_tokens
-from pr_agent.algo.token_handler import TokenEncoder, TokenHandler
+from pr_agent.algo.token_handler import DEFAULT_CLAUDE_TOKEN_FACTOR, TokenEncoder, TokenHandler
+
+
+def _estimate(text):
+    """The Claude estimate of ``text`` under the one-token-per-character encoder and the default factor."""
+    return ceil(len(text) * (1 + DEFAULT_CLAUDE_TOKEN_FACTOR))
 
 
 @pytest.fixture
@@ -25,7 +31,7 @@ def encoder(monkeypatch):
 def test_special_token_literals_do_not_bypass_clipping(encoder, max_tokens, delete_last_line):
     text = "line containing <|endoftext|>\n" * 20
     expected = clip_tokens(
-        text, max_tokens, num_input_tokens=len(text), delete_last_line=delete_last_line,
+        text, max_tokens, num_input_tokens=_estimate(text), delete_last_line=delete_last_line,
     )
 
     assert clip_tokens(text, max_tokens, delete_last_line=delete_last_line) == expected
@@ -44,7 +50,8 @@ def test_non_positive_budget_skips_special_token_encoding(encoder, max_tokens, d
 def test_special_token_clipping_preserves_no_marker_option(encoder):
     text = "<|endoftext|> " * 100
 
-    assert clip_tokens(text, 20, add_three_dots=False) == text[:18]
+    # 1400 characters estimate to 2380 tokens, so 20 tokens keep int(0.9 * 1400 / 2380 * 20) = 10 characters.
+    assert clip_tokens(text, 20, add_three_dots=False) == text[:10]
     encoder.encode.assert_called_once_with(text, disallowed_special=())
 
 
@@ -68,7 +75,7 @@ def test_initial_prompt_count_treats_special_token_literals_as_text(encoder, sys
     handler = TokenHandler(object(), {"text": text}, system, user, model="test-model")
     rendered = [template.replace("{{ text }}", text) for template in (system, user)]
 
-    assert handler.prompt_tokens == sum(map(len, rendered))
+    assert handler.prompt_tokens == sum(map(_estimate, rendered))
     assert encoder.encode.call_count == 2
     for call, prompt in zip(encoder.encode.call_args_list, rendered, strict=True):
         assert call.args == (prompt,)

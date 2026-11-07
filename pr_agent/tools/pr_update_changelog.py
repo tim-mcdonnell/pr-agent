@@ -5,7 +5,7 @@ from datetime import date
 from functools import partial
 
 from pr_agent.algo.ai_handlers.base_ai_handler import BaseAiHandler
-from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
+from pr_agent.algo.ai_handlers.claude_agent_sdk_handler import ClaudeAgentSDKHandler
 from pr_agent.algo.pr_processing import (
     OUTPUT_BUFFER_TOKENS_HARD_THRESHOLD,
     OUTPUT_BUFFER_TOKENS_SOFT_THRESHOLD,
@@ -51,7 +51,8 @@ def strip_wrapping_code_fence(text: str) -> str:
 
 
 class PRUpdateChangelog:
-    def __init__(self, pr_url: str, cli_mode=False, args=None, ai_handler: partial[BaseAiHandler,] = LiteLLMAIHandler):
+    def __init__(self, pr_url: str, cli_mode=False, args=None,
+                 ai_handler: partial[BaseAiHandler,] = ClaudeAgentSDKHandler):
 
         self.git_provider = get_git_provider_for_tool(pr_url)
 

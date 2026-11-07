@@ -348,7 +348,7 @@ def test_auto_review_writes_markdown_artifact_with_stubbed_model(
         return _CANNED_REVIEW, "stop"
 
     monkeypatch.setattr(
-        "pr_agent.algo.ai_handlers.litellm_ai_handler.LiteLLMAIHandler.chat_completion",
+        "pr_agent.algo.ai_handlers.claude_agent_sdk_handler.ClaudeAgentSDKHandler.chat_completion",
         fake_chat_completion,
     )
     monkeypatch.setattr("sys.stdin", io.StringIO(_DIFF))
@@ -379,7 +379,7 @@ pr_files:
 """, "stop"
 
     monkeypatch.setattr(
-        "pr_agent.algo.ai_handlers.litellm_ai_handler.LiteLLMAIHandler.chat_completion",
+        "pr_agent.algo.ai_handlers.claude_agent_sdk_handler.ClaudeAgentSDKHandler.chat_completion",
         fake_chat_completion,
     )
     monkeypatch.chdir(tmp_path)
@@ -399,7 +399,7 @@ def test_plain_diff_ask_keeps_output_after_command_settings(monkeypatch, tmp_pat
         return "The changed line is correct.", "stop"
 
     monkeypatch.setattr(
-        "pr_agent.algo.ai_handlers.litellm_ai_handler.LiteLLMAIHandler.chat_completion", answer,
+        "pr_agent.algo.ai_handlers.claude_agent_sdk_handler.ClaudeAgentSDKHandler.chat_completion", answer,
     )
     monkeypatch.setattr("sys.stdin", io.StringIO(_DIFF))
     output = tmp_path / "answer.md"

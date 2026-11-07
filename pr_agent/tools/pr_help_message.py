@@ -3,20 +3,18 @@ import re
 from functools import partial
 from importlib.resources import files as package_files
 from importlib.resources.abc import Traversable
-from math import ceil, isfinite
 from pathlib import Path, PurePosixPath
 
 from jinja2 import StrictUndefined, select_autoescape
 from jinja2.sandbox import SandboxedEnvironment
-from litellm import token_counter
 
 from pr_agent.algo.ai_handlers.base_ai_handler import BaseAiHandler
-from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
+from pr_agent.algo.ai_handlers.claude_agent_sdk_handler import ClaudeAgentSDKHandler
 from pr_agent.algo.pr_processing import FallbackEligibleError, retry_with_fallback_models
 from pr_agent.algo.run_details import init_run_details, record_command_failure
 from pr_agent.algo.run_output import append_run_details
 from pr_agent.algo.token_budget import get_max_input_tokens, get_max_tokens
-from pr_agent.algo.token_handler import TokenEncoder
+from pr_agent.algo.token_handler import estimate_tokens
 from pr_agent.algo.utils import ModelType, load_yaml
 from pr_agent.command_descriptions import COMMAND_DESCRIPTIONS
 from pr_agent.config_loader import get_settings
@@ -167,7 +165,7 @@ def _load_help_docs_prompt() -> tuple[str, set[str]]:
 
 class PRHelpMessage:
     def __init__(self, pr_url: str, args=None,
-             ai_handler: partial[BaseAiHandler,] = LiteLLMAIHandler, return_as_string=False):
+             ai_handler: partial[BaseAiHandler,] = ClaudeAgentSDKHandler, return_as_string=False):
         self.git_provider = get_git_provider_with_context(pr_url)
         self.question_str = self.parse_args(args)
         self.return_as_string = return_as_string
@@ -273,42 +271,8 @@ class PRHelpMessage:
 
     @staticmethod
     def _count_prompt_tokens(model: str, system_prompt: str, user_prompt: str) -> int:
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-        try:
-            model_token_count = token_counter(model=model, messages=messages)
-            if isinstance(model_token_count, int) and not isinstance(model_token_count, bool) and model_token_count > 0:
-                return model_token_count
-        except Exception as e:
-            get_logger().debug(f"Model-aware token counting failed for {model}: {e}")
-
-        get_logger().debug(f"Using a local token estimate for {model}")
-        encoder = TokenEncoder.get_token_encoder(model)
-        content_tokens = sum(
-            len(encoder.encode(message["content"], disallowed_special=())) for message in messages
-        )
-        framing_tokens = MESSAGE_FRAMING_TOKEN_ALLOWANCE * len(messages) + REPLY_FRAMING_TOKEN_ALLOWANCE
-        raw_factor = get_settings().get("config.model_token_count_estimate_factor", 0)
-        try:
-            extra_factor = float(raw_factor)
-        except (TypeError, ValueError, OverflowError):
-            extra_factor = 0
-        if isinstance(raw_factor, bool) or not isfinite(extra_factor):
-            extra_factor = 0
-        multiplier = max(1.0, 1.0 + extra_factor)
-        raw_estimate = content_tokens + framing_tokens
-        try:
-            estimated_tokens = raw_estimate * multiplier
-            if not isfinite(estimated_tokens):
-                raise ValueError("non-finite token estimate")
-            return ceil(estimated_tokens)
-        except (OverflowError, ValueError):
-            get_logger().warning(
-                f"model_token_count_estimate_factor is too large ({raw_factor!r}), using the estimate as is"
-            )
-            return raw_estimate
+        framing_tokens = MESSAGE_FRAMING_TOKEN_ALLOWANCE * 2 + REPLY_FRAMING_TOKEN_ALLOWANCE
+        return estimate_tokens(system_prompt) + estimate_tokens(user_prompt) + framing_tokens
 
     def _normalize_request_prompts(self, model: str, system_prompt: str, user_prompt: str) -> tuple[str, str]:
         normalize_request_prompts = getattr(self.ai_handler, "normalize_request_prompts", None)

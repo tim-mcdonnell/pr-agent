@@ -6,8 +6,6 @@ from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 
-import openai
-
 from pr_agent.algo.git_patch_processing import (
     decouple_and_convert_to_hunks_with_lines_numbers,
     extend_patch,
@@ -891,7 +889,7 @@ async def retry_with_fallback_models(f: Callable, model_type: ModelType = ModelT
                 get_settings().set("openai.deployment_id", deployment_id)
                 result = await f(model)
             except Exception as e:
-                if not isinstance(e, (openai.APIError, asyncio.TimeoutError, FallbackEligibleError)):
+                if not isinstance(e, (asyncio.TimeoutError, FallbackEligibleError)):
                     raise
                 attempt_errors.append(f"{model}: {type(e).__name__}: {e}")
                 get_logger().warning(

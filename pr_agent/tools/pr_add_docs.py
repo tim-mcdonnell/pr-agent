@@ -2,7 +2,7 @@ import copy
 from functools import partial
 
 from pr_agent.algo.ai_handlers.base_ai_handler import BaseAiHandler
-from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
+from pr_agent.algo.ai_handlers.claude_agent_sdk_handler import ClaudeAgentSDKHandler
 from pr_agent.algo.git_patch_processing import split_diff_lines
 from pr_agent.algo.pr_processing import (
     OUTPUT_BUFFER_TOKENS_HARD_THRESHOLD,
@@ -23,7 +23,7 @@ from pr_agent.log import get_logger
 
 class PRAddDocs:
     def __init__(self, pr_url: str, cli_mode=False, args: list = None,
-                 ai_handler: partial[BaseAiHandler,] = LiteLLMAIHandler):
+                 ai_handler: partial[BaseAiHandler,] = ClaudeAgentSDKHandler):
 
         self.git_provider = get_git_provider_for_tool(pr_url)
         self.main_language = get_main_pr_language(

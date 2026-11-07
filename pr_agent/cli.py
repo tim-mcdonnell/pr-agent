@@ -9,11 +9,6 @@ from starlette_context import context, request_cycle_context
 
 from pr_agent.agent.pr_agent import PRAgent, commands, parse_command
 from pr_agent.agent.request_policy import RequestOutcome
-from pr_agent.algo.ai_handlers.litellm_helpers import (
-    DEFAULT_CALLBACK_TIMEOUT_SECONDS,
-    drain_litellm_callbacks,
-    litellm_callbacks_registered,
-)
 from pr_agent.algo.artifacts import inject_artifact_context
 from pr_agent.algo.review_json_output import review_json_output_path
 from pr_agent.algo.run_details import command_failed, init_run_details
@@ -256,18 +251,8 @@ def run(inargs=None, args=None):
                 target = args.pr_url or "local_diff"
                 result = await PRAgent().handle_request(target, [command] + args.rest)
             if result is RequestOutcome.SKIPPED:
-                # No tool ran, so there are no command callbacks or failures to drain.
+                # No tool ran, so there are no command failures to report.
                 return True, False
-
-            # litellm defers its success/failure callbacks onto the event loop, which
-            # asyncio.run() below tears down the moment this coroutine returns. Give
-            # them a chance to run first, or they are silently dropped.
-            if litellm_callbacks_registered():
-                get_logger().debug("Waiting for event queue to complete")
-                await drain_litellm_callbacks(
-                    get_settings().litellm.get("callback_timeout_seconds", DEFAULT_CALLBACK_TIMEOUT_SECONDS)
-                )
-
             return result, command_failed()
 
         result, recorded_failure = asyncio.run(inner())

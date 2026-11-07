@@ -810,7 +810,7 @@ per_directory_settings_max_tree_pages = 999999
             "vendor/data.bin",
         ]
         assert get_settings().get("config.repo_context_max_lines", 0) != 9999999
-        assert get_settings().config.model_token_count_estimate_factor == 0.3
+        assert get_settings().config.model_token_count_estimate_factor == 0.7
         assert get_settings().config.per_directory_settings_max_tree_pages == 10
         # Model-routing and output knobs still apply.
         assert get_settings().config.model == "nested-model"

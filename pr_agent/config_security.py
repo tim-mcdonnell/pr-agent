@@ -24,10 +24,11 @@
 # custom_labels and config.enable_custom_labels are host-only because every configured custom label
 # is treated as PR-Agent-owned and may be removed when it is absent from the generated label set.
 REPO_OVERRIDABLE_KEYS_BY_HOST_SECTION = {
+    # repo_path bounds what the model may read on the host, so no [claude_code] key is repository-controlled.
+    "claude_code": frozenset(),
     "skills": frozenset({"enabled", "max_skills_tokens"}),
     "push_outputs": frozenset(),
     "prompt_fragments": frozenset(),
-    "bedrock": frozenset(),
     "custom_labels": frozenset(),
 }
 
@@ -65,13 +66,9 @@ REPO_HOST_ONLY_KEYS_BY_SECTION = {
     # Jira lookups use the host's Atlassian credentials, so the reviewed repository must not
     # choose the site or account they authenticate as, or widen the project allowlist they may read.
     "jira": frozenset({"cloud_id", "jira_api_email", "jira_site", "project_keys"}),
-    # extra_headers is attached to every model request, so on a shared gateway that routes or
-    # authenticates by header the reviewed repository must not choose the headers the operator sends.
-    "litellm": frozenset({"extra_headers"}),
     "moonshot": frozenset({"api_base"}),
     "ollama": frozenset({"api_base"}),
     "openai": frozenset({"api_base", "api_type", "api_version"}),
-    "openrouter": frozenset({"api_base"}),
     # structural_reach_input_file is read from the host and echoed into the review, and outside
     # GITHUB_WORKSPACE nothing bounds the path.
     "pr_reviewer": frozenset({"publish_error_details", "structural_reach_input_file"}),
@@ -115,7 +112,6 @@ REPO_HOST_ONLY_KEYS_BY_SECTION = {
         "http_request_timeout",
         "repo_context_max_sibling_files",
         "repo_context_sibling_repos",
-        "num_retries",
     }),
 }
 
@@ -165,7 +161,6 @@ CLI_HOST_ONLY_KEYS_BY_SECTION = {
         "ai_timeout",
         "enable_custom_labels",
         "fallback_models",
-        "num_retries",
         "output_relevant_configurations",
         "repo_context_files",
         "repo_context_max_glob_matches",

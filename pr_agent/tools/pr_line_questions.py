@@ -6,7 +6,7 @@ from jinja2 import StrictUndefined, select_autoescape
 from jinja2.sandbox import SandboxedEnvironment
 
 from pr_agent.algo.ai_handlers.base_ai_handler import BaseAiHandler
-from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
+from pr_agent.algo.ai_handlers.claude_agent_sdk_handler import ClaudeAgentSDKHandler
 from pr_agent.algo.git_patch_processing import extract_hunk_lines_from_patch
 from pr_agent.algo.language_handler import build_language_file_matcher
 from pr_agent.algo.pr_processing import (
@@ -26,7 +26,7 @@ from pr_agent.tools.pr_questions import _sanitize_slash_commands
 
 
 class PR_LineQuestions:
-    def __init__(self, pr_url: str, args=None, ai_handler: partial[BaseAiHandler,] = LiteLLMAIHandler):
+    def __init__(self, pr_url: str, args=None, ai_handler: partial[BaseAiHandler,] = ClaudeAgentSDKHandler):
         self.question_str = self.parse_args(args)
         self.git_provider = get_git_provider_for_tool(pr_url)
         # Only the questioned file's language is needed for model-call logging.

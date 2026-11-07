@@ -16,16 +16,11 @@ from pr_agent.agent.pr_agent import (
     response_language_instructions,
 )
 from pr_agent.agent.request_policy import RequestOutcome, enforce_request_policy
-from pr_agent.algo.ai_handlers.litellm_helpers import (
-    DEFAULT_CALLBACK_TIMEOUT_SECONDS,
-    drain_litellm_callbacks,
-    litellm_callbacks_registered,
-)
 from pr_agent.algo.artifacts import inject_artifact_context as _inject_artifact_context
 from pr_agent.algo.run_details import command_failed, init_run_details
 from pr_agent.algo.setting_utils import _as_bool_setting, normalize_setting_list
 from pr_agent.config_loader import get_settings
-from pr_agent.doctor import PROVIDER_AUTH_CORRECTIONS, missing_provider_key_env_vars
+from pr_agent.doctor import missing_provider_key_env_vars
 from pr_agent.git_providers import get_git_provider_with_context
 from pr_agent.git_providers.github_provider import IncompletePullRequestFilesError
 from pr_agent.git_providers.utils import apply_host_settings, apply_repo_settings
@@ -250,12 +245,32 @@ async def _run_review_commands(event_payload):
             return
 
 
+# Action inputs (GitHub passes each as INPUT_<NAME>) mapped to the credential env vars Claude Code reads.
+ACTION_CREDENTIAL_INPUTS = {
+    "INPUT_CLAUDE_CODE_OAUTH_TOKEN": "CLAUDE_CODE_OAUTH_TOKEN",
+    "INPUT_ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
+}
+
+
+def _apply_action_inputs() -> None:
+    """Apply the action's credential and model inputs; explicit env vars and empty inputs change nothing."""
+    for input_name, env_name in ACTION_CREDENTIAL_INPUTS.items():
+        value = os.environ.get(input_name, "").strip()
+        if value and not os.environ.get(env_name):
+            os.environ[env_name] = value
+    model = os.environ.get("INPUT_MODEL", "").strip()
+    if model:
+        get_settings().set("CONFIG.MODEL", model)
+    fallback_models = os.environ.get("INPUT_FALLBACK_MODELS", "").strip()
+    if fallback_models:
+        get_settings().set(
+            "CONFIG.FALLBACK_MODELS", [name.strip() for name in fallback_models.split(",") if name.strip()])
+
+
 async def run_action():
     # Get environment variables
     GITHUB_EVENT_NAME = os.environ.get('GITHUB_EVENT_NAME')
     GITHUB_EVENT_PATH = os.environ.get('GITHUB_EVENT_PATH')
-    OPENAI_KEY = os.environ.get('OPENAI_KEY') or os.environ.get('OPENAI.KEY')
-    OPENAI_ORG = os.environ.get('OPENAI_ORG') or os.environ.get('OPENAI.ORG')
     GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
     # get_settings().set("CONFIG.PUBLISH_OUTPUT_PROGRESS", False)
 
@@ -268,12 +283,9 @@ async def run_action():
         return
 
     # Set the environment variables in the settings
-    if OPENAI_KEY:
-        get_settings().set("OPENAI.KEY", OPENAI_KEY)
-    if OPENAI_ORG:
-        get_settings().set("OPENAI.ORG", OPENAI_ORG)
     get_settings().set("GITHUB.USER_TOKEN", GITHUB_TOKEN)
     get_settings().set("GITHUB.DEPLOYMENT_TYPE", "user")
+    _apply_action_inputs()
     enable_output = get_setting_or_env("GITHUB_ACTION_CONFIG.ENABLE_OUTPUT", True)
     if isinstance(enable_output, str) and not enable_output.strip():
         enable_output = False
@@ -289,7 +301,7 @@ async def run_action():
         print(f"Failed to parse JSON: {e}")
         return
 
-    # Skip ignored comments before loading repository settings or checking a model API key.
+    # Skip ignored comments before loading repository settings or checking for a Claude credential.
     if GITHUB_EVENT_NAME in ("issue_comment", "pull_request_review_comment"):
         if event_payload.get("action") not in ("created", "edited"):
             return
@@ -351,22 +363,11 @@ async def run_action():
                 and enforce_request_policy(pr_url, provider=settings_provider) is False):
             return
         _provider, env_var_names = missing_key
-        # Raised, not printed, and rendered only from constant-table env var names and
-        # static text: CodeQL's clear-text-logging sinks (logging/print/stderr) never
-        # see anything derived near key handling, and the raise is not a sink itself.
-        correction = PROVIDER_AUTH_CORRECTIONS.get(env_var_names)
-        if correction is not None:
-            raise SystemExit(
-                f"Stopping before any tool runs: {correction} "
-                "'pr-agent doctor' preflights the same check by hand."
-            )
-        key_hint = (
-            f"Set {' or '.join(env_var_names)} in this workflow's env."
-            if env_var_names else "Replace the placeholder key in provider settings or workflow env."
-        )
+        # Raised, not printed, and rendered only from constant env var names and static text: CodeQL's
+        # clear-text-logging sinks never see anything derived near key handling.
         raise SystemExit(
-            "Stopping before any tool runs: no usable API key for the active model's provider. "
-            f"{key_hint} "
+            "Stopping before any tool runs: no Claude credential. "
+            f"Set {' or '.join(env_var_names)} (or the action's claude_code_oauth_token input). "
             "'pr-agent doctor' preflights the same check by hand."
         )
 
@@ -627,7 +628,7 @@ def _action_settings_scope():
     cm.__enter__()
     try:
         # Apply the trusted host layer (CONFIG.EXTRA_CONFIG_URL) to the process-wide settings the copy is taken
-        # from, so the options LiteLLM reads from them keep seeing it. Doing so inside the scope lets the run's
+        # from, so code reading the global settings keeps seeing it. Doing so inside the scope lets the run's
         # apply_repo_settings() calls reuse the fetched payload; repository overrides stay in the copy.
         try:
             apply_host_settings()
@@ -642,10 +643,9 @@ def _action_settings_scope():
 
 async def _run_action_and_drain():
     """
-    Run the action, then flush litellm's deferred callbacks before the loop closes.
+    Run the action and exit non-zero when it recorded a failure.
 
-    Wrapping here rather than at the end of run_action() covers its many early
-    returns too, and keeps run_action() itself free of teardown concerns.
+    Wrapping here rather than at the end of run_action() covers its many early returns too.
     """
     status = _ActionStatus()
     token = _action_status.set(status)
@@ -654,16 +654,7 @@ async def _run_action_and_drain():
         # One request scope per run, as in the webhook servers and CLI, lets the run's commands share the
         # GitHub provider and its PR, commit and file-content caches instead of rebuilding them per tool.
         with _action_settings_scope():
-            try:
-                await run_action()
-            finally:
-                if litellm_callbacks_registered():
-                    await drain_litellm_callbacks(
-                        get_settings().litellm.get(
-                            "callback_timeout_seconds",
-                            DEFAULT_CALLBACK_TIMEOUT_SECONDS,
-                        )
-                    )
+            await run_action()
     finally:
         _action_status.reset(token)
 

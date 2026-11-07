@@ -24,7 +24,7 @@ PR-Agent automates AI-assisted reviews for pull requests across multiple git pro
 - `tests/unittest/`, `tests/e2e_tests/`, and `tests/health_test/` contain pytest-based unit, end-to-end, and smoke checks.
 - `docs/` holds the Docusaurus site (`docs/docusaurus.config.js` and `docs/sidebars.js` plus content under `docs/docs/`); theme overrides live in `docs/src/` and static assets in `docs/static/`.
 - `.github/workflows/` defines CI pipelines for unit tests, coverage, docs deployment, pre-commit, and PR-agent self-review.
-- `docker/` provides build targets for services (`github_app`, `gitlab_webhook`, etc.) and the `test` stage used in CI; the root `Dockerfile.github_action_dockerhub` only wraps the published `github_action` image for `action.yaml`.
+- `docker/` provides build targets for services (`github_app`, `gitlab_webhook`, etc.) and the `test` stage used in CI; `.github/workflows/docker-image.yml` publishes the `github_action` target to GHCR, and `action.yaml` runs that image.
 
 ## Architecture and Request Flow
 

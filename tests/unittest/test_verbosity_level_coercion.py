@@ -52,4 +52,4 @@ def test_build_a_large_pr_diff_with_a_quoted_verbosity_level(restore_verbosity):
     restore_verbosity.set("config.verbosity_level", "2")
     token_handler = TokenHandler(type("PR", (), {"title": "t"})(), {}, "system", "user")
 
-    assert get_pr_diff(BigPRProvider(), token_handler, "gpt-4o") is not None
+    assert get_pr_diff(BigPRProvider(), token_handler, "sonnet") is not None

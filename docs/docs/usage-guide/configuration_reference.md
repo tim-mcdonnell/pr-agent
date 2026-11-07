@@ -29,8 +29,8 @@ See [Configuration options](../usage-guide/configuration_options.md#global-confi
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `model` | "gpt-6.1-sol" |  |
-| `fallback_models` | ["gpt-6-luna"] |  |
+| `model` | "opus" | Claude Code model slug: opus, sonnet, haiku, fable, an "[1m]" variant, or a full id such as claude-opus-5-5 |
+| `fallback_models` | ["sonnet"] |  |
 **CLI**
 
 | Key | Default | Description |
@@ -61,13 +61,9 @@ See [Configuration options](../usage-guide/configuration_options.md#global-confi
 | `extra_config_url` | "" | optional URL or path to an additional .pr_agent.toml merged before the repo-local config; also settable via --extra_config_url or PR_AGENT_EXTRA_CONFIG_URL. See docs/docs/usage-guide/configuration_options.md#external-configuration-url. |
 | `disable_auto_feedback` | false |  |
 | `enable_auto_approval` | false | when true, /review may auto-approve a PR via auto_approve_logic(); that caller is currently commented out |
-| `ai_timeout` | 120 | 2 minutes |
+| `ai_timeout` | 300 | seconds per model call, including read-only repository exploration turns |
 | `http_request_timeout` | 60 | host-only connect/read inactivity seconds for GitLab/Gitea and direct Bitbucket/Gerrit HTTP attempts; capped at 600 |
-| `retry_same_model_on_timeout` | true | when false, a timed-out call is not retried on the same model and moves on to fallback_models |
-| `retry_same_model_on_length` | false | when true, an empty response truncated by the output cap is retried on the same model instead of moving straight to fallback_models |
-| `num_retries` | 4 | same-model retries of a request the provider rejects (429, 5xx, connection error) before fallback_models, waiting for its Retry-After (up to 30 s) or with exponential backoff; 0 falls back at once. Timeouts and empty responses use retry_same_model_on_timeout / retry_same_model_on_length instead |
 | `skip_keys` | [] |  |
-| `custom_reasoning_model` | false | when true, disables system messages and temperature controls for models that don't support chat-style inputs |
 | `response_language` | "en-US" | PR response locale (e.g., "en-US", "it-IT"), also used for fixed comment text; applies only during each command. See additional_configurations.md. |
 | `repo_context_files` | ["AGENTS.md"] | Prompt context files: paths, alternatives, globs, sibling entries; [] disables. See [docs](additional_configurations.md). |
 | `repo_context_from_default_branch` | true | Read repo context files from the repository default branch (trusts only default-branch content). Set to false to read from the PR target branch instead. |
@@ -82,10 +78,10 @@ See [Configuration options](../usage-guide/configuration_options.md#global-confi
 | --- | --- | --- |
 | `max_description_tokens` | 500 |  |
 | `max_commits_tokens` | 500 | Token cap on the commit messages sent to the model by /describe, /review, /improve and other tools. 0 means no limit; -1 sends none. |
-| `max_model_tokens` | 32000 | Limits the maximum number of tokens that can be used by any model, regardless of the model's default capabilities. |
+| `max_model_tokens` | 64000 | caps the Claude tokens of prompt context (diff, files, history) per call, whatever the model allows |
 | `custom_model_max_tokens` | -1 | Override unknown models or Sol-tier GPT-6 on non-native custom providers. |
-| `max_output_tokens` | 0 | 0 = unset (the provider's own default applies) |
-| `model_token_count_estimate_factor` | 0.3 | factor to increase the token count estimate, in order to reduce likelihood of model failure due to too many tokens - applicable only when requesting an accurate estimate. |
+| `max_output_tokens` | 0 | output token cap passed to Claude Code as CLAUDE_CODE_MAX_OUTPUT_TOKENS; 0 = Claude Code's default |
+| `model_token_count_estimate_factor` | 0.7 | added to 1 to scale tiktoken o200k counts to Claude tokens (Claude 5.5 measured 1.40-1.68x); applied to every estimate |
 | `image_input_token_allowance` | 4096 | reserve tokens per image when provider counting omits or underestimates image cost |
 **patch extension logic**
 
@@ -100,15 +96,10 @@ See [Configuration options](../usage-guide/configuration_options.md#global-confi
 | `cli_mode` | false |  |
 | `output_relevant_configurations` | false |  |
 | `output_run_details` | false | if true, append an agent run details section (model, tokens, time cost, AI calls) to generated PR comments |
-| `output_run_cost` | false | if true, collect estimated LiteLLM API cost and include it inside the enabled run details section |
+| `output_run_cost` | false | if true, include Claude Code's list-price cost estimate in the enabled run details section (not a subscription charge) |
 | `large_patch_policy` | "clip" | "clip" (default) or "skip"; a missing value is treated as "clip" |
 | `duplicate_prompt_examples` | false |  |
 | `persistent_inline_comments` | false | Enable persistent inline comments (issue #2037) to fingerprint each inline comment and embed a provider-compatible marker, then skip re-posting suggestions already present on the PR/MR across runs. |
-**seed**
-
-| Key | Default | Description |
-| --- | --- | --- |
-| `seed` | -1 | set positive value to fix the seed (and ensure temperature=0) |
 | `temperature` | 0.2 |  |
 **ignore logic**
 
@@ -129,20 +120,7 @@ See [Configuration options](../usage-guide/configuration_options.md#global-confi
 | `is_auto_command` | false | will be auto-set to true if the command is triggered by an automation |
 | `propagate_tool_errors` | false | when true, a tool re-raises instead of swallowing an internal error, so a caller can tell a failed run from an empty one |
 | `enable_ai_metadata` | false | will enable adding ai metadata |
-| `add_user_to_requests` | false | send the current command and PR URL in the OpenAI-compatible "user" request field, for provider-side attribution of requests (e.g. OpenRouter "external_user") |
-| `reasoning_effort` | "medium" | "none", "minimal", "low", "medium", "high", "xhigh", "max" |
-| `additional_reasoning_effort_models` | [] | Optional: additional model IDs that accept config.reasoning_effort. Reasoning support is otherwise decided by litellm's bundled model metadata (and the maintained Grok registry), so add an ID here when litellm does not know the model (custom OpenAI-compatible endpoints), or when another provider hosts a Sol-tier GPT-6 model under the same ID. Model IDs match exactly or through any provider prefix (e.g. "deepseek-v4-flash-0731" matches "openai/deepseek-v4-flash-0731"). LiteLLM whitelists reasoning_effort through allowed_openai_params for OpenAI-compatible models it does not recognize, so the parameter reaches the endpoint. The default "medium" may be rejected by providers that accept a different subset (e.g. "none"/"low"/"high"/"max"); adding a custom model id now surfaces a provider-side error instead of the previous silent drop. |
-| `no_temperature_models` | ["deepseek/deepseek-reasoner", "o1-mini", "o1-mini-2024-09-12", "o1", "o1-2024-12-17", "o3-mini", "o3-mini-2025-01-31", "o3", "o3-2025-04-16", "o4-mini", "o4-mini-2025-04-16", "gpt-5.1-codex", "gpt-5.1-codex-mini", "gpt-5.2-codex", "gpt-5.3-codex", "gpt-5-mini", "moonshotai.kimi-k3", "us.moonshotai.kimi-k3", "global.moonshotai.kimi-k3", "kimi-k3", "kimi-k3.1-pro", "zai.glm-5"] | Optional: model IDs that must never receive the temperature parameter, on top of what litellm's parameter metadata reports. Temperature support is otherwise decided by litellm.get_supported_openai_params() (mirroring reasoning_effort), so add an ID here when litellm reports temperature as supported but the provider rejects it, or when an OpenAI-compatible endpoint accepts but you still want it dropped. Adaptive-thinking Claude models (Opus 4.7/4.8, Opus/Sonnet/Fable 5.x and Haiku 5.5) never receive temperature. Match model IDs exactly or through any provider prefix. For OpenRouter `:nitro` and `:floor` routing shortcuts, also match the suffix-free base ID (for example, match `future-model` to `openrouter/vendor/future-model:nitro`). Keep other model variants at their full ID. Preserve the former static registry entries below when litellm's metadata still marks them temperature-capable; see #3611 (Derive temperature support from LiteLLM metadata and retire NO_SUPPORT_TEMPERATURE_MODELS) for the probe diff. Bedrock rejects temperature for Kimi K3 and GLM-5 ("This model doesn't support the temperature field"); Moonshot/Kimi reasoning endpoints reject custom temperature. |
-**extended thinking for Claude reasoning models**
-
-| Key | Default | Description |
-| --- | --- | --- |
-| `enable_claude_extended_thinking` | false | Set to true to enable extended thinking feature |
-| `extended_thinking_budget_tokens` | 2048 | Thinking budget used when enable_claude_extended_thinking is true. |
-| `extended_thinking_max_output_tokens` | 4096 | Output cap in extended-thinking mode; it replaces max_output_tokens and must be at least the thinking budget. |
-| `enable_claude_adaptive_thinking` | false | Adaptive thinking for Claude Opus 4.7/4.8 and Claude 5 models. When enabled, these models receive thinking={"type": "adaptive"} and an output_config effort. Do not add adaptive-only models to claude_extended_thinking_models_override; when both features are enabled, adaptive thinking takes precedence. |
-| `claude_adaptive_thinking_models_override` | [] | Optional model ids to treat as adaptive-only Claude models, including opaque Bedrock ARNs. See [changing a model](changing_a_model.md). |
-| `claude_extended_thinking_models_override` | [] | Optional: override the built-in list of Claude models that receive the extended-thinking payload. When non-empty, this list fully replaces the built-in defaults (see CLAUDE_EXTENDED_THINKING_MODELS in pr_agent/algo/__init__.py). Leave empty to use the defaults. |
+| `reasoning_effort` | "medium" | Claude Code effort: "low", "medium", "high", "xhigh", "max"; "minimal" = "low"; "none" disables thinking |
 | `extract_issue_from_branch` | true | Extract issue number from PR source branch name (e.g. feature/1-auth-google -> issue #1). When true, branch-derived issue URLs are merged with tickets from the PR description for compliance. Set to false to restore description-only behaviour. Note: Branch-name extraction is GitHub-only for now; other providers planned for later. |
 | `branch_issue_regex` | "" | Optional: custom regex with one or more capturing groups for the issue number (validated at runtime); only the first group is used. If the regex has no capturing group, the default pattern is used; if it does not compile, no branch tickets are extracted. If empty, uses default pattern: first 1-6 digits at start of branch or after a slash, followed by hyphen or end (e.g. feature/1-test, 123-fix). GitHub only; other providers planned for later. |
 | `description_issue_regex` | "" | Configure a regex replacing bare #N references, with exactly one capturing group for an ASCII issue number. Leave empty for default matching (up to six digits); fall back with a warning on invalid patterns. Set the custom digit limit in the pattern; use only integer-parseable captures. Keep full URLs and owner/repo#N references. Use TOML literal quotes to preserve backslashes, e.g. description_issue_regex = '(?i)(?:fixes\|closes\|resolves)\s+#(\d+)' |
@@ -499,49 +477,16 @@ See [Ticket context](../core-abilities/fetching_ticket_context.md#jira-integrati
 | `project_keys` | ["*"] | Optional allowlist of Jira project keys, e.g. ["PROJ", "OPS"]. When non-empty, key-shaped text with another prefix ("SHA-256", "UTF-8", "ISO-8601") is dropped before any lookup, so it no longer costs an authenticated 404 each. Entries must be plain upper-case keys; a supplied list with no valid entry disables the lookup rather than widening it. Wildcard ["*"] (default) looks up every key found. An empty list ([]) disables Jira ticket lookups. Host-only, like jira_site and jira_api_email: repository settings and comment arguments cannot change them. |
 
 
-## `[litellm]` {#litellm}
+## `[claude_code]` {#claude_code}
 
-See [Changing a model](../usage-guide/changing_a_model.md#changing-a-model-in-pr-agent).
-
-| Key | Default | Description |
-| --- | --- | --- |
-| `enable_callbacks` | false |  |
-| `add_session_id_to_requests` | false | send a stable x-litellm-session-id header derived from the PR URL, so LiteLLM groups every request for the same PR into one session |
-| `success_callback` | [] | process-wide: only the deployment's configuration and environment set it, not a repo's .pr_agent.toml; in the Action, use a workflow env entry |
-| `failure_callback` | [] | process-wide, set like success_callback |
-| `service_callback` | [] | process-wide, set like success_callback |
-| `turn_off_message_logging` | false | set true to keep prompt/response content (the whole PR diff) out of callback payloads; strongly recommended with the "otel" callback |
-| `custom_llm_provider` | "" | Optional: forward a fixed custom_llm_provider to LiteLLM, so a raw hosted model id (e.g. "claude-sonnet-4-5") reaches the provider unchanged instead of being rewritten by LiteLLM's prefix inference. Empty = let LiteLLM infer the provider from the model name. |
-| `force_streaming_custom_llm_provider` | "" | Force streaming when the request matches this provider AND its api_base contains one of the substrings below. Some OpenAI-compatible endpoints return a response that LiteLLM cannot normalize in non-streaming mode. Both must be set for the workaround to apply. |
-| `force_streaming_api_base_substrings` | [] |  |
-| `callback_timeout_seconds` | 30 | max seconds to wait for pending litellm callbacks to flush before exiting |
-| `base_models` | {} | Optional: map an opaque request model id (for example a Bedrock application inference profile ARN) to a LiteLLM-priced model id, so run cost is reported instead of unavailable. Default empty; named models are priced by LiteLLM directly and need no entry here. |
-| `cache_control_injection_points` | [] | Optional: enable Anthropic prompt caching via LiteLLM, e.g. [{location = "message", role = "system"}] (https://docs.litellm.ai/docs/tutorials/prompt_caching). PR-Agent forwards these points only for models whose name contains "claude" or that are listed in a Claude thinking override; LiteLLM adds the cache_control blocks. LiteLLM's own default injection (litellm.enable_anthropic_prompt_caching, env LITELLM_ENABLE_ANTHROPIC_PROMPT_CACHING, off by default) applies only when no points are configured here, so the two never double-inject. A warning is logged once per process when the points cannot take effect (non-Anthropic model, no prompt-cache support, or a prefix below the model's minimum). |
-
-
-## `[bedrock]` {#bedrock}
-
-See [Amazon Bedrock](../usage-guide/changing_a_model.md#amazon-bedrock).
+See [Claude Code integration](../usage-guide/claude_agent_sdk.md#read-only-repository-exploration).
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `guardrail_identifier` | "" | guardrail ID or ARN; empty = disabled. When set, Bedrock models must use "bedrock/converse/..."; other Bedrock routes fail instead of running unguarded |
-| `guardrail_version` | "" | e.g. "1" or "DRAFT"; required when guardrail_identifier is set |
-| `guardrail_trace` | "disabled" | "enabled", "enabled_full" or "disabled" |
-
-
-## `[openrouter]` {#openrouter}
-
-See [OpenRouter](../usage-guide/changing_a_model.md#openrouter).
-
-| Key | Default | Description |
-| --- | --- | --- |
-| `provider_only` | [] | restrict routing to these upstream providers only, a hard allowlist (e.g. ["z-ai"]); empty = OpenRouter default routing |
-| `provider_order` | [] | preferred provider order; ignored when provider_only is set; empty = unset |
-| `allow_fallbacks` | true | when provider_order is set, allow routing beyond the listed providers |
-| `reasoning_effort` | "" | Invalid reasoning_effort values are warned about and treated as unset. Empty inherits config.reasoning_effort for reasoning-capable models (probed against litellm's bundled reasoning metadata or the Grok registry, or listed in additional_reasoning_effort_models). Valid values: "none", "minimal", "low", "medium", "high", "xhigh", "max". OpenRouter normalizes "max" to "xhigh" for LiteLLM/OpenRouter compatibility. Model-specific support varies. For models not covered by PR-Agent's clamps, do not assume "none" disables reasoning; check the selected model and provider's support. |
-| `reasoning_max_tokens` | 0 | Use a positive value to override global effort and non-none OpenRouter-specific efforts. Keep reasoning disabled for explicit openrouter.reasoning_effort = "none", except on Grok 4.5/4.6, Gemini 3.7/3.8 Flash, and the GPT-6 models whose pages omit "none" (GPT-6 Astra and GPT-6.1 Sol). Clamp "none" to the lowest supported effort there before applying the budget, so a positive budget wins. Keep max_tokens greater than the reasoning budget where the provider requires it. |
-| `max_tokens` | 0 | hard cap on completion tokens for the request; 0 = unset |
+| `explore_repo` | true | when a checkout is available, let the model explore it during explore_commands |
+| `explore_commands` | ["review", "auto_review", "improve", "ask", "ask_line"] | commands whose model calls may explore |
+| `repo_path` | "" | checkout to explore; empty uses $GITHUB_WORKSPACE inside GitHub Actions, otherwise exploration is off |
+| `max_turns` | 20 | turns per model call while exploring, including the final answer |
 
 
 ## `[model_routing]` — send a small pull request to a cheaper primary model (disabled by default) {#model_routing-send a small pull request to a cheaper primary model (disabled by default)}

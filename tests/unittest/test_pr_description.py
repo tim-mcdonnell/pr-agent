@@ -267,7 +267,7 @@ async def test_large_pr_skips_when_all_changed_files_are_filtered(monkeypatch):
             side_effect=_fit_tickets(obj.token_handler),
         ),
     ):
-        await obj._prepare_prediction("gpt-4o")
+        await obj._prepare_prediction("opus")
 
     obj._get_prediction.assert_not_awaited()
     assert obj.prediction is None
@@ -291,7 +291,7 @@ async def test_large_pr_keeps_fallback_when_unprocessed_files_remain(monkeypatch
         ),
         pytest.raises(FallbackEligibleError, match="Description chunk 1"),
     ):
-        await obj._prepare_prediction("gpt-4o")
+        await obj._prepare_prediction("opus")
 
     obj._get_prediction.assert_not_awaited()
     assert obj.prediction is None
@@ -312,7 +312,7 @@ async def test_describe_skips_when_large_pr_handling_is_off_and_diff_is_empty(mo
             side_effect=_fit_tickets(obj.token_handler),
         ),
     ):
-        await obj._prepare_prediction("gpt-4o")
+        await obj._prepare_prediction("opus")
 
     obj._get_prediction.assert_not_awaited()
     assert obj.prediction is None
@@ -363,20 +363,20 @@ async def test_unusable_large_pr_header_retries_before_appending_file_walkthroug
     async def predict(model, patches_diff, prompt="pr_description_prompt"):
         if prompt == "pr_description_only_description_prompts":
             header_models.append(model)
-            return "null" if model == "gpt-4o" else _header_prediction()
+            return "null" if model == "opus" else _header_prediction()
         return _file_prediction("src/file1.py") if "file1" in patches_diff else _file_prediction("src/file2.py")
 
     obj._get_prediction = AsyncMock(side_effect=predict)
     with (
         patch("pr_agent.tools.pr_description.get_pr_diff", return_value=""),
         patch("pr_agent.tools.pr_description.get_pr_diff_multiple_patchs", return_value=_large_pr_chunks()),
-        patch("pr_agent.algo.pr_processing._get_all_models", return_value=["gpt-4o", "gpt-4o-mini"]),
+        patch("pr_agent.algo.pr_processing._get_all_models", return_value=["opus", "sonnet"]),
         patch("pr_agent.algo.pr_processing._get_all_deployments", return_value=[None, None]),
         patch("pr_agent.algo.pr_processing.route_primary_model", return_value=None),
     ):
         await retry_with_fallback_models(obj._prepare_prediction, ModelType.WEAK)
 
-    assert header_models == ["gpt-4o", "gpt-4o-mini"]
+    assert header_models == ["opus", "sonnet"]
     assert load_yaml(obj.prediction, keys_fix_yaml=obj.keys_fix)["title"] == "Partial description"
     assert "pr_files:" in obj.prediction
 
@@ -926,7 +926,7 @@ description: |
             "pr_agent.tools.pr_description.get_pr_diff_multiple_patchs",
             return_value=(chunks, [10, 10], [], [], {}, [["src/file1.py"], ["src/file2.py"]]),
         ) as mock_multi:
-            await obj._prepare_prediction("gpt-4o")
+            await obj._prepare_prediction("opus")
 
             # Verify get_pr_diff was called with exact production arguments
             mock_diff.assert_called_once()
@@ -991,7 +991,7 @@ description: |
             "pr_agent.tools.pr_description.get_pr_diff_multiple_patchs",
             return_value=_large_pr_chunks(),
         ):
-            await obj._prepare_prediction("gpt-4o")
+            await obj._prepare_prediction("opus")
 
         parsed = load_yaml(obj.prediction, keys_fix_yaml=obj.keys_fix)
         assert [file["changes_title"].strip() for file in parsed["pr_files"]] == [
@@ -1018,7 +1018,7 @@ description: |
             "pr_agent.tools.pr_description.get_pr_diff_multiple_patchs",
             return_value=_large_pr_chunks(),
         ):
-            await obj._prepare_prediction("gpt-4o")
+            await obj._prepare_prediction("opus")
 
         parsed = load_yaml(obj.prediction, keys_fix_yaml=obj.keys_fix)
         assert [file["filename"].strip() for file in parsed["pr_files"]] == ["src/file1.py", "src/file2.py"]
@@ -1055,7 +1055,7 @@ description: |
             "pr_agent.tools.pr_description.get_pr_diff_multiple_patchs",
             return_value=_large_pr_chunks(),
         ):
-            await obj._prepare_prediction("gpt-4o")
+            await obj._prepare_prediction("opus")
 
         parsed = load_yaml(obj.prediction, keys_fix_yaml=obj.keys_fix)
         assert [file["filename"].strip() for file in parsed["pr_files"]] == ["src/file1.py", "src/file2.py"]
@@ -1092,7 +1092,7 @@ description: |
                 [["src/file1.py", "src/file2.py"]],
             ),
         ):
-            await obj._prepare_prediction("gpt-4o")
+            await obj._prepare_prediction("opus")
 
         parsed = load_yaml(obj.prediction, keys_fix_yaml=obj.keys_fix)
         assert [file["filename"].strip() for file in parsed["pr_files"]] == ["src/file1.py", "src/file2.py"]
@@ -1117,7 +1117,7 @@ description: |
             "pr_agent.tools.pr_description.get_pr_diff_multiple_patchs",
             return_value=_large_pr_chunks(),
         ), pytest.raises(RuntimeError, match="file1.py"):
-            await obj._prepare_prediction("gpt-4o")
+            await obj._prepare_prediction("opus")
 
         assert len(chunk_calls) == 2
 
@@ -1131,7 +1131,7 @@ description: |
             "pr_agent.tools.pr_description.get_pr_diff_multiple_patchs",
             return_value=_large_pr_chunks(),
         ), pytest.raises(ValueError, match="invalid YAML"):
-            await obj._prepare_prediction("gpt-4o")
+            await obj._prepare_prediction("opus")
 
         assert all(
             call.kwargs["prompt"] == "pr_description_only_files_prompts"
@@ -1154,7 +1154,7 @@ description: |
             "pr_agent.tools.pr_description.get_pr_diff_multiple_patchs",
             return_value=(chunks, [0, 10], [], [], {}, [["src/file1.py"], ["src/file2.py"]]),
         ):
-            await obj._prepare_prediction("gpt-4o")
+            await obj._prepare_prediction("opus")
 
         assert obj.description_failed_files == ["src/file1.py"]
         assert obj.description_failed_chunk_count == 1
@@ -1175,7 +1175,7 @@ description: |
             "pr_agent.tools.pr_description.get_pr_diff_multiple_patchs",
             return_value=_large_pr_chunks(),
         ), pytest.raises(asyncio.CancelledError):
-            await obj._prepare_prediction("gpt-4o")
+            await obj._prepare_prediction("opus")
 
     @pytest.mark.asyncio
     async def test_large_pr_all_fail_then_fallback_model_keeps_partial_result(self, monkeypatch):
@@ -1185,7 +1185,7 @@ description: |
 
         async def mock_get_prediction(model, patches_diff, prompt="pr_description_prompt"):
             calls.append((model, prompt, patches_diff))
-            if model == "gpt-4o":
+            if model == "opus":
                 raise TimeoutError("primary chunk failed")
             if prompt == "pr_description_only_description_prompts":
                 return _header_prediction()
@@ -1198,7 +1198,7 @@ description: |
             "pr_agent.tools.pr_description.get_pr_diff_multiple_patchs",
             return_value=_large_pr_chunks(),
         ), patch(
-            "pr_agent.algo.pr_processing._get_all_models", return_value=["gpt-4o", "gpt-4o-mini"]
+            "pr_agent.algo.pr_processing._get_all_models", return_value=["opus", "sonnet"]
         ), patch(
             "pr_agent.algo.pr_processing._get_all_deployments", return_value=[None, None]
         ), patch(
@@ -1207,11 +1207,11 @@ description: |
             await retry_with_fallback_models(obj._prepare_prediction, ModelType.WEAK)
 
         assert [(model, prompt) for model, prompt, _ in calls] == [
-            ("gpt-4o", "pr_description_only_files_prompts"),
-            ("gpt-4o", "pr_description_only_files_prompts"),
-            ("gpt-4o-mini", "pr_description_only_files_prompts"),
-            ("gpt-4o-mini", "pr_description_only_files_prompts"),
-            ("gpt-4o-mini", "pr_description_only_description_prompts"),
+            ("opus", "pr_description_only_files_prompts"),
+            ("opus", "pr_description_only_files_prompts"),
+            ("sonnet", "pr_description_only_files_prompts"),
+            ("sonnet", "pr_description_only_files_prompts"),
+            ("sonnet", "pr_description_only_description_prompts"),
         ]
         assert obj.description_failed_chunk_count == 1
         assert obj.description_failed_files == ["src/file2.py"]
@@ -1257,7 +1257,7 @@ pr_files:
         with patch("pr_agent.tools.pr_description.get_pr_diff", return_value="normal diff content") as mock_diff, patch(
             "pr_agent.tools.pr_description.get_pr_diff_multiple_patchs"
         ) as mock_multi:
-            await obj._prepare_prediction("gpt-4o")
+            await obj._prepare_prediction("opus")
 
             mock_diff.assert_called_once()
             mock_multi.assert_not_called()
@@ -1298,7 +1298,7 @@ changes_diagram: |
             "pr_agent.tools.pr_description.get_pr_diff_multiple_patchs",
             return_value=([["diff"]], [10], [], [], {}, [["src/file1.py"]]),
         ):
-            await obj._prepare_prediction("gpt-4o")
+            await obj._prepare_prediction("opus")
 
         assert "changes_diagram:" in obj.prediction
         obj._prepare_data()
@@ -1331,7 +1331,7 @@ changes_diagram: |
         obj.ai_handler.chat_completion = AsyncMock(side_effect=capture_chat)
 
         # Call the real _get_prediction which renders templates via StrictUndefined
-        await obj._get_prediction("gpt-4o", "sample diff content", prompt=prompt_name)
+        await obj._get_prediction("opus", "sample diff content", prompt=prompt_name)
 
         # Both system and user must have been rendered without StrictUndefined errors
         assert "system" in rendered and len(rendered["system"]) > 0

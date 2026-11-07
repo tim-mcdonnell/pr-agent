@@ -1,69 +1,38 @@
-from types import SimpleNamespace
-
-import litellm
 import pytest
 
 import pr_agent.algo.token_budget as token_budget
 from pr_agent.algo import (
     _CLAUDE_MODEL_FAMILIES,
-    CLAUDE_EXTENDED_THINKING_MODELS,
     MAX_TOKENS,
     _generate_claude_registries,
     _validate_claude_model_family,
 )
 from pr_agent.algo.token_budget import get_max_tokens
 
+CLAUDE_EXTENDED_THINKING_MODELS = _generate_claude_registries()[1]
 
-def _expected_max_tokens(model: str) -> int:
-    """Resolve a model's expected max tokens the same way get_max_tokens() does:
-    prefer the static MAX_TOKENS registry, else fall back to LiteLLM (issue #3196).
-    Used so tests keep working for models that were intentionally removed from
-    MAX_TOKENS because LiteLLM's fallback already resolves them correctly.
-    """
-    if model in MAX_TOKENS:
-        return MAX_TOKENS[model]
-    return int(litellm.get_model_info(model)["max_input_tokens"])
+
+def _settings(custom_model_max_tokens=0, max_model_tokens=0):
+    return type("", (), {
+        "config": type("", (), {
+            "custom_model_max_tokens": custom_model_max_tokens, "max_model_tokens": max_model_tokens,
+        })(),
+    })()
 
 
 class TestGetMaxTokens:
 
-    @pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"])
-    @pytest.mark.parametrize("provider", ["ollama", "openai_like", "azure_text", "text-completion-openai"])
-    @pytest.mark.parametrize("custom_limit", [16000, "16000"])
-    @pytest.mark.parametrize("global_limit, expected", [(0, 16000), (32000, 16000), (8000, 8000)])
-    def test_custom_provider_bare_gpt6_honors_explicit_limit(
-        self, monkeypatch, model, provider, custom_limit, global_limit, expected
-    ):
-        settings = type("", (), {
-            "config": type("", (), {
-                "custom_model_max_tokens": custom_limit, "max_model_tokens": global_limit,
-            })(),
-            "litellm": type("", (), {"custom_llm_provider": provider})(),
-        })()
-        monkeypatch.setattr(token_budget, "get_settings", lambda: settings)
-        monkeypatch.setattr(litellm, "get_model_info", lambda *args: pytest.fail("Explicit limit expected"))
-
-        assert get_max_tokens(model) == expected
-        assert get_max_tokens(model, ignore_max_model_tokens=True) == 16000
-
     @pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna", "gpt-6-astra", "gpt-6.1-sol", "gpt-5.6"])
-    @pytest.mark.parametrize("provider", ["", "openai", "azure", "azure_ai", "aiohttp_openai", "openrouter"])
-    def test_native_registered_models_keep_registry_priority(self, monkeypatch, model, provider):
-        settings = type("", (), {
-            "config": type("", (), {"custom_model_max_tokens": 16000, "max_model_tokens": 0})(),
-            "litellm": type("", (), {"custom_llm_provider": provider})(),
-        })()
+    def test_registered_models_keep_registry_priority(self, monkeypatch, model):
+        settings = _settings(custom_model_max_tokens=16000)
         monkeypatch.setattr(token_budget, "get_settings", lambda: settings)
 
         assert get_max_tokens(model) == 1050000
 
     @pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna", "gpt-6-astra", "gpt-6.1-sol", "gpt-5.6"])
     @pytest.mark.parametrize("custom_limit", [0, -1])
-    def test_custom_provider_without_override_keeps_registered_limit(self, monkeypatch, model, custom_limit):
-        settings = type("", (), {
-            "config": type("", (), {"custom_model_max_tokens": custom_limit, "max_model_tokens": 0})(),
-            "litellm": type("", (), {"custom_llm_provider": "ollama"})(),
-        })()
+    def test_without_override_keeps_registered_limit(self, monkeypatch, model, custom_limit):
+        settings = _settings(custom_model_max_tokens=custom_limit)
         monkeypatch.setattr(token_budget, "get_settings", lambda: settings)
 
         assert get_max_tokens(model) == 1050000
@@ -123,19 +92,6 @@ class TestGetMaxTokens:
 
         assert get_max_tokens(model) == 400000
 
-    @pytest.mark.parametrize("model", ["gpt-5.5", "gpt-5.5-2026-04-23"])
-    def test_gpt55_model_max_tokens(self, monkeypatch, model):
-        fake_settings = type('', (), {
-            'config': type('', (), {
-                'custom_model_max_tokens': 0,
-                'max_model_tokens': 0
-            })()
-        })()
-
-        monkeypatch.setattr(token_budget, "get_settings", lambda: fake_settings)
-
-        assert get_max_tokens(model) == 1050000
-
     @pytest.mark.parametrize("model", ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
     def test_gpt56_model_max_tokens(self, monkeypatch, model):
         fake_settings = type('', (), {
@@ -163,7 +119,6 @@ class TestGetMaxTokens:
             })()
         })()
         monkeypatch.setattr(token_budget, "get_settings", lambda: fake_settings)
-        monkeypatch.setattr(litellm, "get_model_info", lambda *args, **kwargs: pytest.fail("Static lookup expected"))
 
         assert get_max_tokens(f"{prefix}{model}{suffix}") == (cap or 1050000)
 
@@ -178,7 +133,6 @@ class TestGetMaxTokens:
             })()
         })()
         monkeypatch.setattr(token_budget, "get_settings", lambda: fake_settings)
-        monkeypatch.setattr(litellm, "get_model_info", lambda *args, **kwargs: pytest.fail("Static lookup expected"))
 
         assert get_max_tokens(f"azure_ai/{model}{suffix}") == expected
 
@@ -200,52 +154,25 @@ class TestGetMaxTokens:
         assert get_max_tokens(alias.format(model)) == expected
 
     @pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"])
-    @pytest.mark.parametrize("prefix", ["", "openai/", "openrouter/openai/"])
     @pytest.mark.parametrize("route", [":nitro", ":floor", ":online", ":exacto"])
     @pytest.mark.parametrize("custom_limit, expected", [(0, 1050000), (128000, 128000)])
-    def test_gpt6_thinking_route_alias_max_tokens(self, monkeypatch, model, prefix, route, custom_limit, expected):
-        fake_settings = type("", (), {
-            "config": type("", (), {
-                "custom_model_max_tokens": custom_limit,
-                "max_model_tokens": 0,
-            })(),
-            "litellm": type("", (), {
-                "custom_llm_provider": "" if prefix.startswith("openrouter/") else "openrouter",
-            })(),
-        })()
+    def test_gpt6_thinking_route_alias_max_tokens(self, monkeypatch, model, route, custom_limit, expected):
+        fake_settings = _settings(custom_model_max_tokens=custom_limit)
         monkeypatch.setattr(token_budget, "get_settings", lambda: fake_settings)
-        monkeypatch.setattr(litellm, "get_model_info", lambda *args, **kwargs: pytest.fail("Static lookup expected"))
 
-        assert get_max_tokens(f"{prefix}{model}_thinking{route}") == expected
+        assert get_max_tokens(f"openrouter/openai/{model}_thinking{route}") == expected
 
     @pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"])
-    @pytest.mark.parametrize(("prefix", "custom_provider"), [
-        ("", "ollama"), ("openrouter/openai/", "ollama"), ("", ""),
-    ])
     @pytest.mark.parametrize("route", [":nitro", ":floor", ":online", ":exacto"])
-    @pytest.mark.parametrize("custom_limit, expected", [(0, 32768), (16384, 16384)])
-    def test_non_openrouter_gpt6_variant_preserves_metadata_limit(
-        self, monkeypatch, model, prefix, custom_provider, route, custom_limit, expected
-    ):
-        fake_settings = type("", (), {
-            "config": type("", (), {
-                "custom_model_max_tokens": custom_limit,
-                "max_model_tokens": 0,
-            })(),
-            "litellm": type("", (), {"custom_llm_provider": custom_provider})(),
-        })()
-        monkeypatch.setattr(token_budget, "get_settings", lambda: fake_settings)
-        lookup_models = []
+    def test_non_openrouter_gpt6_variant_needs_custom_limit(self, monkeypatch, model, route):
+        """A routing suffix outside an openrouter/ model is not a GPT-6 alias, so it needs a custom limit."""
+        variant = f"{model}{route}"
+        monkeypatch.setattr(token_budget, "get_settings", lambda: _settings())
+        with pytest.raises(Exception, match="Unable to resolve a positive input-token limit"):
+            get_max_tokens(variant)
 
-        def model_info(lookup_model):
-            lookup_models.append(lookup_model)
-            return {"max_input_tokens": 32768}
-
-        monkeypatch.setattr(litellm, "get_model_info", model_info)
-        variant = f"{prefix}{model}{route}"
-
-        assert get_max_tokens(variant) == expected
-        assert lookup_models == ([variant] if custom_limit == 0 else [])
+        monkeypatch.setattr(token_budget, "get_settings", lambda: _settings(custom_model_max_tokens=16384))
+        assert get_max_tokens(variant) == 16384
 
     @pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"])
     @pytest.mark.parametrize("route", [":batch", ":free"])
@@ -257,54 +184,18 @@ class TestGetMaxTokens:
             })()
         })()
         monkeypatch.setattr(token_budget, "get_settings", lambda: fake_settings)
-        monkeypatch.setattr(litellm, "get_model_info", lambda *args, **kwargs: None)
 
         with pytest.raises(Exception, match="Unable to resolve a positive input-token limit"):
             get_max_tokens(f"openrouter/openai/{model}_thinking{route}")
 
     @pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"])
-    @pytest.mark.parametrize("custom_provider", ["ollama", "openai_like", "azure_text", "text-completion-openai"])
-    @pytest.mark.parametrize("alias", [
-        "{}_thinking", "openai/{}", "azure/{}", "azure_ai/{}", "openrouter/openai/{}",
-        "openai/{}_thinking", "openrouter/openai/{}_thinking",
-    ])
-    @pytest.mark.parametrize("custom_limit, expected", [(0, 32768), (16384, 16384)])
-    def test_custom_provider_gpt6_alias_preserves_metadata_limit(
-        self, monkeypatch, model, custom_provider, alias, custom_limit, expected
-    ):
-        fake_settings = type("", (), {
-            "config": type("", (), {"custom_model_max_tokens": custom_limit, "max_model_tokens": 0})(),
-            "litellm": type("", (), {"custom_llm_provider": custom_provider})(),
-        })()
-        monkeypatch.setattr(token_budget, "get_settings", lambda: fake_settings)
-        lookup_models = []
-
-        def model_info(lookup_model):
-            lookup_models.append(lookup_model)
-            return {"max_input_tokens": 32768}
-
-        monkeypatch.setattr(litellm, "get_model_info", model_info)
-        variant = alias.format(model)
-
-        assert get_max_tokens(variant) == expected
-        assert lookup_models == ([variant] if custom_limit == 0 else [])
-
-    @pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"])
-    @pytest.mark.parametrize("custom_provider", ["openai", "aiohttp_openai", "azure", "azure_ai", "openrouter"])
     @pytest.mark.parametrize("alias", ["{}_thinking", "openai/{}", "openai/{}_thinking"])
-    def test_native_provider_gpt6_alias_preserves_registered_limit(self, monkeypatch, model, custom_provider, alias):
-        fake_settings = type("", (), {
-            "config": type("", (), {"custom_model_max_tokens": 0, "max_model_tokens": 0})(),
-            "litellm": type("", (), {"custom_llm_provider": custom_provider})(),
-        })()
-        monkeypatch.setattr(token_budget, "get_settings", lambda: fake_settings)
-        monkeypatch.setattr(litellm, "get_model_info", lambda *args: pytest.fail("Static lookup expected"))
+    def test_gpt6_alias_preserves_registered_limit(self, monkeypatch, model, alias):
+        monkeypatch.setattr(token_budget, "get_settings", lambda: _settings())
 
         assert get_max_tokens(alias.format(model)) == 1050000
 
     @pytest.mark.parametrize("model", [
-        "gpt-5_thinking",
-        "gpt-5-2025-08-07_thinking",
         "gpt-5.4-mini_thinking",
         "gpt-5.6_thinking",
         "gpt-5.6-sol_thinking",
@@ -319,8 +210,7 @@ class TestGetMaxTokens:
             })()
         })()
         monkeypatch.setattr(token_budget, "get_settings", lambda: fake_settings)
-        expected = _expected_max_tokens(model.removesuffix("_thinking"))
-        assert get_max_tokens(model) == expected
+        assert get_max_tokens(model) == MAX_TOKENS[model.removesuffix("_thinking")]
 
     @pytest.mark.parametrize("model", [
         "gpt-5.6_thinking",
@@ -354,14 +244,11 @@ class TestGetMaxTokens:
         assert get_max_tokens("openai/gpt-5.6_thinking") == 7000
 
     @pytest.mark.parametrize("model", [
-        "openai/gpt-5_thinking",
         "azure/gpt-5.6_thinking",
         "openai/gpt-5.6-sol_thinking",
         "azure/gpt-5.6-terra_thinking",
         "openai/gpt-5.6-luna_thinking",
         "azure/openai/gpt-5.6_thinking",
-        "openai/gpt-5-2025-08-07_thinking",
-        "azure/gpt-5-2025-08-07_thinking",
     ])
     def test_gpt5_thinking_prefixed_model_max_tokens(self, monkeypatch, model):
         fake_settings = type("", (), {
@@ -376,8 +263,7 @@ class TestGetMaxTokens:
         while tmp.startswith(("openai/", "azure/")):
             tmp = tmp.removeprefix("openai/").removeprefix("azure/")
         base = tmp.removesuffix("_thinking")
-        expected = _expected_max_tokens(base)
-        assert get_max_tokens(model) == expected
+        assert get_max_tokens(model) == MAX_TOKENS[base]
 
     def test_non_gpt5_thinking_model_max_tokens_not_stripped(self, monkeypatch):
         fake_settings = type("", (), {
@@ -389,112 +275,6 @@ class TestGetMaxTokens:
         monkeypatch.setattr(token_budget, "get_settings", lambda: fake_settings)
         with pytest.raises(Exception, match="Unable to resolve a positive input-token limit"):
             get_max_tokens("gpt-4o_thinking")
-
-    @pytest.mark.parametrize("invalid_limit", ["unknown", None, {}, float("inf"), 0, -1])
-    @pytest.mark.parametrize("raw_resolves", [False, True])
-    def test_thinking_fallback_skips_invalid_token_metadata(self, monkeypatch, invalid_limit, raw_resolves):
-        """Continue past unusable metadata to the raw alias or the unresolved-model error."""
-        settings = type("Settings", (), {
-            "config": type("Config", (), {"custom_model_max_tokens": 0, "max_model_tokens": 32000})(),
-            "get": lambda self, key, default=None: default,
-        })()
-        monkeypatch.setattr(token_budget, "get_settings", lambda: settings)
-        model = "openai/gpt-5.9_thinking"
-        lookups = []
-
-        def get_model_info(candidate):
-            lookups.append(candidate)
-            return {"max_input_tokens": "65536" if raw_resolves and candidate == model else invalid_limit}
-
-        monkeypatch.setattr(litellm, "get_model_info", get_model_info)
-        if raw_resolves:
-            assert get_max_tokens(model) == 32000
-        else:
-            with pytest.raises(Exception, match="Unable to resolve a positive input-token limit"):
-                get_max_tokens(model)
-        assert lookups == ["openai/gpt-5.9", "gpt-5.9", model]
-
-    @pytest.mark.parametrize(
-        ("model", "resolved_model", "expected_lookups", "azure_mode"),
-        [
-            (
-                "gpt-5.9_thinking",
-                "openai/gpt-5.9",
-                ["openai/gpt-5.9"],
-                False,
-            ),
-            (
-                "gpt-5.9_thinking",
-                "gpt-5.9",
-                ["openai/gpt-5.9", "gpt-5.9"],
-                False,
-            ),
-            (
-                "gpt-5.9_thinking",
-                "azure/gpt-5.9",
-                ["azure/gpt-5.9"],
-                True,
-            ),
-            (
-                "openai/gpt-5.9_thinking",
-                "openai/gpt-5.9",
-                ["openai/gpt-5.9"],
-                False,
-            ),
-            (
-                "openai/gpt-5.9_thinking",
-                "azure/gpt-5.9",
-                ["azure/gpt-5.9"],
-                True,
-            ),
-            (
-                "azure/gpt-5.9_thinking",
-                "azure/gpt-5.9",
-                ["azure/gpt-5.9"],
-                False,
-            ),
-            (
-                "azure/openai/gpt-5.9_thinking",
-                "azure/gpt-5.9",
-                ["azure/gpt-5.9"],
-                False,
-            ),
-            (
-                "openai/gpt-5.9_thinking",
-                "openai/gpt-5.9_thinking",
-                ["openai/gpt-5.9", "gpt-5.9", "openai/gpt-5.9_thinking"],
-                False,
-            ),
-        ],
-    )
-    def test_gpt5_thinking_litellm_fallback(
-        self,
-        monkeypatch,
-        model,
-        resolved_model,
-        expected_lookups,
-        azure_mode,
-    ):
-        setting_values = {"OPENAI.API_TYPE": "azure"} if azure_mode else {}
-        fake_settings = type("", (), {
-            "config": type("", (), {
-                "custom_model_max_tokens": 0,
-                "max_model_tokens": 0
-            })(),
-            "get": lambda self, key, default=None: setting_values.get(key, default),
-        })()
-        monkeypatch.setattr(token_budget, "get_settings", lambda: fake_settings)
-        lookups = []
-
-        def mock_get_model_info(m):
-            lookups.append(m)
-            if m == resolved_model:
-                return {"max_input_tokens": 123456}
-            raise Exception("not found")
-
-        monkeypatch.setattr(litellm, "get_model_info", mock_get_model_info)
-        assert get_max_tokens(model) == 123456
-        assert lookups == expected_lookups
 
     @pytest.mark.parametrize(
         ("model", "expected"),
@@ -517,28 +297,8 @@ class TestGetMaxTokens:
 
         monkeypatch.setattr(token_budget, "get_settings", lambda: fake_settings)
 
-        monkeypatch.setattr(litellm, "get_model_info", lambda *_: pytest.fail("Registry limit expected"))
         assert get_max_tokens(model) == (min(expected, cap) if cap else expected)
         assert get_max_tokens(model, ignore_max_model_tokens=True) == expected
-
-    @pytest.mark.parametrize("model, input_limit", [
-        ("openrouter/anthropic/claude-sonnet-5", 1000000),
-        ("openrouter/deepseek/deepseek-chat", 163840),
-    ])
-    @pytest.mark.parametrize("cap", [0, 32000, 500000])
-    def test_openrouter_input_budget_regression(self, monkeypatch, model, input_limit, cap):
-        """Guard verified input budgets, including reductions hidden by the default cap.
-
-        These are compatibility baselines from the pinned bundled map, not immutable
-        provider limits. Revalidate intentional changes rather than deriving expected
-        values from the same SDK lookup under test.
-        """
-        assert model not in MAX_TOKENS, "Revalidate SDK fallback coverage if this model gains a built-in limit"
-        settings = SimpleNamespace(config=SimpleNamespace(custom_model_max_tokens=0, max_model_tokens=cap))
-        monkeypatch.setattr(token_budget, "get_settings", lambda: settings)
-
-        assert get_max_tokens(model) == (min(input_limit, cap) if cap else input_limit)
-        assert get_max_tokens(model, ignore_max_model_tokens=True) == input_limit
 
     # Test situations where the model is not registered and exists as a custom model
     def test_model_has_custom(self, monkeypatch):
@@ -557,7 +317,6 @@ class TestGetMaxTokens:
         assert get_max_tokens(model) == expected
 
     @pytest.mark.parametrize("model", [
-        "gpt-5.1-codex",
         "gpt-5.2-codex",
         "gpt-5.3-codex",
     ])
@@ -571,9 +330,7 @@ class TestGetMaxTokens:
 
         monkeypatch.setattr(token_budget, "get_settings", lambda: fake_settings)
 
-        expected = _expected_max_tokens(model)
-
-        assert get_max_tokens(model) == expected
+        assert get_max_tokens(model) == MAX_TOKENS[model]
 
     def test_model_not_max_tokens_and_not_has_custom(self, monkeypatch):
         fake_settings = type('', (), {
@@ -606,29 +363,12 @@ class TestGetMaxTokens:
         assert get_max_tokens(model) == expected
 
     @pytest.mark.parametrize("model", [
-        "gemini/gemini-3-flash-preview",
-        "vertex_ai/gemini-3-flash-preview",
-        "vertex_ai/gemini-3-pro-preview",
-        "gemini/gemini-3.1-pro-preview",
-        "vertex_ai/gemini-3.1-pro-preview",
         "gemini/gemini-3.1-flash",
         "vertex_ai/gemini-3.1-flash",
         "gemini/gemini-3.1-pro",
         "vertex_ai/gemini-3.1-pro",
-        "gemini/gemini-3.1-flash-lite",
-        "vertex_ai/gemini-3.1-flash-lite",
-        "gemini/gemini-3.1-flash-lite-preview",
-        "vertex_ai/gemini-3.1-flash-lite-preview",
-        "gemini/gemini-3.5-flash",
-        "vertex_ai/gemini-3.5-flash",
-        "gemini/gemini-3.5-flash-lite",
-        "vertex_ai/gemini-3.5-flash-lite",
         "gemini/gemini-3.5-pro",
         "vertex_ai/gemini-3.5-pro",
-        "gemini/gemini-3.6-flash",
-        "vertex_ai/gemini-3.6-flash",
-        "gemini/gemini-3.7-flash",
-        "vertex_ai/gemini-3.7-flash",
         "gemini/gemini-3.8-flash",
         "vertex_ai/gemini-3.8-flash",
     ])
@@ -689,14 +429,11 @@ class TestGetMaxTokens:
         assert get_max_tokens(model) == 1000000
 
     @pytest.mark.parametrize("model", [
-        "xai/grok-4.5",
-        "xai/grok-4.5-latest",
         "xai/grok-build-latest",
-        "xai/grok-4.6",
         "openrouter/x-ai/grok-4.5",
         "openrouter/x-ai/grok-4.6",
     ])
-    def test_xai_and_openrouter_grok_4_5_and_4_6_models_max_tokens(self, monkeypatch, model):
+    def test_xai_grok_build_and_openrouter_grok_4_5_and_4_6_models_max_tokens(self, monkeypatch, model):
         fake_settings = type("", (), {
             "config": type("", (), {
                 "custom_model_max_tokens": 0,
@@ -946,25 +683,6 @@ class TestGetMaxTokens:
     @pytest.mark.parametrize(
         "model",
         [
-            "moonshot/kimi-k3",
-        ],
-    )
-    def test_moonshot_kimi_k3_model_max_tokens(self, monkeypatch, model):
-        fake_settings = type("", (), {
-            "config": type("", (), {
-                "custom_model_max_tokens": 0,
-                "max_model_tokens": 0
-            })()
-        })()
-
-        monkeypatch.setattr(token_budget, "get_settings", lambda: fake_settings)
-
-        # 1M per LiteLLM (issue #3196): moonshot/kimi-k3 was understated at 262144.
-        assert get_max_tokens(model) == 1048576
-
-    @pytest.mark.parametrize(
-        "model",
-        [
             "dashscope/qwen3.8-max",
         ],
     )
@@ -1018,145 +736,19 @@ class TestGetMaxTokens:
 
         assert get_max_tokens(model) == 1048576
 
-    # --- LiteLLM fallback tests (issue #2957) ---
-
-    def test_max_tokens_takes_precedence_over_litellm(self, monkeypatch):
-        """MAX_TOKENS lookup must not consult LiteLLM."""
-        fake_settings = type('', (), {
-            'config': type('', (), {
-                'custom_model_max_tokens': 0,
-                'max_model_tokens': 0
-            })()
-        })()
-        monkeypatch.setattr(token_budget, "get_settings", lambda: fake_settings)
-
-        def fail_if_called(*args, **kwargs):
-            raise AssertionError("litellm.get_model_info should not be called")
-
-        monkeypatch.setattr(litellm, "get_model_info", fail_if_called)
-
-        model = "gpt-3.5-turbo"
-        assert get_max_tokens(model) == MAX_TOKENS[model]
-
-    def test_custom_model_max_tokens_takes_precedence_over_litellm(self, monkeypatch):
-        """Positive custom_model_max_tokens must not consult LiteLLM."""
-        fake_settings = type('', (), {
-            'config': type('', (), {
-                'custom_model_max_tokens': 7000,
-                'max_model_tokens': 0
-            })()
-        })()
-        monkeypatch.setattr(token_budget, "get_settings", lambda: fake_settings)
-
-        def fail_if_called(*args, **kwargs):
-            raise AssertionError("litellm.get_model_info should not be called")
-
-        monkeypatch.setattr(litellm, "get_model_info", fail_if_called)
-
-        assert get_max_tokens("fake-provider/fake-model-xyz") == 7000
-
-    def test_litellm_fallback_returns_max_input_tokens(self, monkeypatch):
-        """Unknown model resolved via litellm.get_model_info max_input_tokens."""
-        fake_settings = type('', (), {
-            'config': type('', (), {
-                'custom_model_max_tokens': 0,
-                'max_model_tokens': 0
-            })()
-        })()
-        monkeypatch.setattr(token_budget, "get_settings", lambda: fake_settings)
-        monkeypatch.setattr(litellm, "get_model_info",
-                            lambda model: {"max_input_tokens": 65536})
-
-        assert get_max_tokens("fake-provider/fake-model-xyz") == 65536
-
-    def test_litellm_fallback_uses_max_input_tokens_not_max_tokens(self, monkeypatch):
-        """Must use max_input_tokens, not max_tokens from litellm metadata."""
-        fake_settings = type('', (), {
-            'config': type('', (), {
-                'custom_model_max_tokens': 0,
-                'max_model_tokens': 0
-            })()
-        })()
-        monkeypatch.setattr(token_budget, "get_settings", lambda: fake_settings)
-        monkeypatch.setattr(litellm, "get_model_info", lambda model: {
-            "max_input_tokens": 32000,
-            "max_tokens": 99999,
-        })
-
-        assert get_max_tokens("fake-provider/fake-model-xyz") == 32000
-
-    @pytest.mark.parametrize("metadata", [None, {}, {"max_input_tokens": None},
-                                         {"max_input_tokens": 0}, {"max_input_tokens": -1},
-                                         {"max_input_tokens": "invalid"}, ValueError("private endpoint details")])
-    def test_litellm_fallback_failure_explains_input_limit(self, monkeypatch, metadata):
-        """Explain failed resolution without leaking the underlying exception text."""
-        fake_settings = type('', (), {
-            'config': type('', (), {
-                'custom_model_max_tokens': 0,
-                'max_model_tokens': 0
-            })()
-        })()
-        monkeypatch.setattr(token_budget, "get_settings", lambda: fake_settings)
-
-        def raise_for_unknown(model):
-            if isinstance(metadata, Exception):
-                raise metadata
-            return metadata
-
-        monkeypatch.setattr(litellm, "get_model_info", raise_for_unknown)
+    @pytest.mark.parametrize("metadata_model", ["fake-provider/fake-unknown-model", "anthropic/not-a-claude-model"])
+    def test_unknown_model_failure_explains_input_limit(self, monkeypatch, metadata_model):
+        """Explain that an unregistered model needs config.custom_model_max_tokens."""
+        monkeypatch.setattr(token_budget, "get_settings", lambda: _settings())
 
         with pytest.raises(Exception, match="Unable to resolve a positive input-token limit") as error:
-            get_max_tokens("fake-provider/fake-unknown-model")
+            get_max_tokens(metadata_model)
         message = str(error.value)
-        assert "fake-provider/fake-unknown-model" in message
-        assert "built-in limits or LiteLLM metadata" in message
+        assert metadata_model in message
+        assert "built-in limits" in message
+        assert "LiteLLM" not in message
         assert "config.custom_model_max_tokens to a verified positive input-token limit" in message
         assert "config.max_model_tokens only caps a resolved limit" in message
-        assert "private endpoint details" not in message
-
-    def test_litellm_fallback_respects_max_model_tokens_cap(self, monkeypatch):
-        """max_model_tokens cap applies to LiteLLM-resolved values."""
-        fake_settings = type('', (), {
-            'config': type('', (), {
-                'custom_model_max_tokens': 0,
-                'max_model_tokens': 8000
-            })()
-        })()
-        monkeypatch.setattr(token_budget, "get_settings", lambda: fake_settings)
-        monkeypatch.setattr(litellm, "get_model_info",
-                            lambda model: {"max_input_tokens": 65536})
-
-        assert get_max_tokens("fake-provider/fake-model-xyz") == 8000
-
-    @pytest.mark.parametrize("model, documented_input_tokens", [
-        ("cohere/command-r-plus-08-2024", None),
-        ("github_copilot/gpt-4o", 64000),
-        ("github_copilot/gpt-4.1", 128000),
-    ])
-    def test_litellm_fallback_uses_real_registry(self, monkeypatch, model, documented_input_tokens):
-        """Verify registry fallback and Copilot input limits in changing_a_model.md."""
-
-        assert model not in MAX_TOKENS
-
-        model_info = litellm.get_model_info(model)
-        expected_max_input_tokens = model_info["max_input_tokens"]
-
-        assert isinstance(expected_max_input_tokens, int)
-        assert expected_max_input_tokens > 0
-        if documented_input_tokens is not None:
-            assert expected_max_input_tokens == documented_input_tokens, (
-                f"Review {model} input limits in docs/docs/usage-guide/changing_a_model.md"
-            )
-
-        fake_settings = type("", (), {
-            "config": type("", (), {
-                "custom_model_max_tokens": 0,
-                "max_model_tokens": 0,
-            })()
-        })()
-        monkeypatch.setattr(token_budget, "get_settings", lambda: fake_settings)
-
-        assert get_max_tokens(model) == expected_max_input_tokens
 
     def test_claude_opus_4_8_family_expansion_and_capabilities(self):
         """Independent verification of Opus 4.8 generated aliases and capabilities."""
@@ -1378,24 +970,17 @@ class TestGetMaxTokens:
     @pytest.mark.parametrize(
         "model, expected",
         [
-            ("gpt-4o", 128000),
-            ("gpt-4.1", 1047576),
+            ("opus", 1000000),
+            ("claude-sonnet-5-5", 1000000),
+            ("custom-model", 128000),
         ],
     )
-    def test_ignore_max_model_tokens_returns_unreduced_litellm_value(self, monkeypatch, model, expected):
+    def test_ignore_max_model_tokens_returns_unreduced_value(self, monkeypatch, model, expected):
         """Sites that bypass the max_model_tokens clamp (pr_help_message, pr_help_docs,
-        pr_code_suggestions) must still get the raw model context even after the exact
-        LiteLLM duplicates left the registry: the value now resolves from LiteLLM, while
-        the default path keeps clamping to config.max_model_tokens."""
-        fake_settings = type('', (), {
-            'config': type('', (), {
-                'custom_model_max_tokens': 0,
-                'max_model_tokens': 32000
-            })()
-        })()
-
+        pr_code_suggestions) get the raw model context, while the default path keeps
+        clamping to config.max_model_tokens."""
+        fake_settings = _settings(custom_model_max_tokens=128000, max_model_tokens=32000)
         monkeypatch.setattr(token_budget, "get_settings", lambda: fake_settings)
-        monkeypatch.setattr(token_budget, "MAX_TOKENS", {})  # simulate deletion of the entry
 
         assert get_max_tokens(model) == 32000
         assert get_max_tokens(model, ignore_max_model_tokens=True) == expected
@@ -1423,105 +1008,37 @@ class TestCorrectedClaudeWindows:
         assert get_max_tokens(model, ignore_max_model_tokens=True) == window
 
 
-class TestNoLiteLLMDuplicates:
+class TestClaudeCodeAliases:
 
-    # Keep existing static limits until model registry cleanup is handled separately.
-    # LiteLLM now has matching metadata; removing these pins would change custom-limit precedence.
-    PRESERVED_MODEL_LIMITS = {
-        "vertex_ai/claude-sonnet-4@20250514",
-        "bedrock/moonshotai.kimi-k3",
-        "bedrock/us.moonshotai.kimi-k3",
-        "bedrock/global.moonshotai.kimi-k3",
-        "bedrock/converse/moonshotai.kimi-k3",
-        "bedrock/converse/us.moonshotai.kimi-k3",
-        "bedrock/converse/global.moonshotai.kimi-k3",
-    }
+    @pytest.mark.parametrize("alias, resolved", [
+        ("opus", "claude-opus-5-5"),
+        ("default", "claude-opus-5-5"),
+        ("sonnet", "claude-sonnet-5-5"),
+        ("haiku", "claude-haiku-5-5"),
+        ("fable", "claude-fable-5-1"),
+        ("best", "claude-fable-5-1"),
+        ("opus[1m]", "claude-opus-5-5"),
+        ("anthropic/sonnet", "claude-sonnet-5-5"),
+        ("anthropic/claude-haiku-5-5", "claude-haiku-5-5"),
+        ("claude-opus-5-5[1m]", "claude-opus-5-5"),
+    ])
+    @pytest.mark.parametrize("cap", [0, 64000])
+    def test_alias_uses_the_selected_models_window(self, monkeypatch, alias, resolved, cap):
+        monkeypatch.setattr(token_budget, "get_settings", lambda: _settings(max_model_tokens=cap))
 
-    # Models pinned in MAX_TOKENS because LiteLLM's bundled backup cost map (used
-    # when the import-time fetch fails, and under LITELLM_LOCAL_MODEL_COST_MAP=true)
-    # does not carry them, so the get_max_tokens() fallback cannot resolve them.
-    # They are exempt from the no-duplicates guard by design.
-    LITELLM_BUNDLED_MAP_UNKNOWN = {
-        "gemini/gemini-3.8-flash",
-        "vertex_ai/gemini-3.8-flash",
-        "gemini/gemini-4-argon",
-        "vertex_ai/gemini-4-argon",
-        "openrouter/x-ai/grok-4.5",
-        "openrouter/x-ai/grok-4.6",
-        "xai/grok-build-latest",
-        "zai/glm-5.2",
-    }
+        assert get_max_tokens(alias) == (min(MAX_TOKENS[resolved], cap) if cap else MAX_TOKENS[resolved])
+        assert get_max_tokens(alias, ignore_max_model_tokens=True) == MAX_TOKENS[resolved]
 
-    # The models issue #3196 found pinned more than 10% below LiteLLM's reported
-    # context window. zai/glm-5.2 is covered by test_zai_glm_5_2_model_max_tokens
-    # (kept pinned, absent from the bundled cost map); gpt-5.4 / gpt-5.4-2026-03-05
-    # are excluded because their 272000 pin is a documented safe default.
-    AUDITED_UNDERSTATED_MODELS = [
-        "mistral/mistral-medium-latest",
-        "mistral/mistral-small-latest",
-        "mistral/codestral-latest",
-        "mistral/mistral-large-latest",
-        "codestral/codestral-latest",
-        "codestral/codestral-2405",
-        "watsonx/mistralai/mistral-large",
-        "moonshot/kimi-k3",
-        "deepseek/deepseek-reasoner",
-        "deepinfra/deepseek-ai/DeepSeek-R1",
-        "gpt-5",
-        "gpt-5-2025-08-07",
-        "gpt-5-nano",
-        "gpt-5-mini",
-        "gpt-5.1",
-        "gpt-5.1-2025-11-13",
-        "gpt-5.1-codex",
-        "gpt-5.1-codex-mini",
-        "ollama/llama3",
-    ]
+    def test_registered_alias_ignores_custom_limit(self, monkeypatch):
+        monkeypatch.setattr(token_budget, "get_settings", lambda: _settings(custom_model_max_tokens=5000))
 
-    @pytest.mark.parametrize("model", AUDITED_UNDERSTATED_MODELS)
-    def test_previously_understated_models_now_resolve_correctly(self, monkeypatch, model):
-        """Regression guard for issue #3196.
+        assert get_max_tokens("sonnet") == MAX_TOKENS["claude-sonnet-5-5"]
 
-        A static MAX_TOKENS entry takes precedence over the LiteLLM fallback, so a
-        pin below LiteLLM's max_input_tokens silently shrinks the usable context.
-        Compare against LiteLLM live rather than a copied number, so a LiteLLM
-        upgrade that raises a window does not fail this test.
-        """
-        fake_settings = type("", (), {
-            "config": type("", (), {
-                "custom_model_max_tokens": 0,
-                "max_model_tokens": 0
-            })()
-        })()
-        monkeypatch.setattr(token_budget, "get_settings", lambda: fake_settings)
+    @pytest.mark.parametrize("model", ["claude-unreleased-9", "anthropic/claude-unreleased-9[1m]"])
+    def test_unregistered_claude_model_needs_custom_limit(self, monkeypatch, model):
+        monkeypatch.setattr(token_budget, "get_settings", lambda: _settings())
+        with pytest.raises(Exception, match="Unable to resolve a positive input-token limit"):
+            get_max_tokens(model)
 
-        litellm_max = int(litellm.get_model_info(model)["max_input_tokens"])
-        assert get_max_tokens(model) >= litellm_max
-
-    def test_static_max_tokens_has_no_exact_litellm_duplicates(self):
-        """Hardcoded MAX_TOKENS entries must not just mirror LiteLLM.
-
-        get_max_tokens() already falls back to litellm.get_model_info(), so a
-        static entry that reports the identical value is dead duplication.
-        Generator-expanded Claude families are excluded: they also drive the
-        extended-thinking registry, and their 1M-context handling is a separate,
-        deliberate judgement (issue #3196). Entries in
-        LITELLM_BUNDLED_MAP_UNKNOWN are pinned because the bundled cost map does
-        not carry them, so the fallback could not resolve them.
-        """
-        generated = set(_generate_claude_registries()[0])
-        static = {
-            k: v
-            for k, v in MAX_TOKENS.items()
-            if k not in generated and k not in self.LITELLM_BUNDLED_MAP_UNKNOWN
-            and k not in self.PRESERVED_MODEL_LIMITS
-        }
-        dups = []
-        for model, ours in static.items():
-            try:
-                theirs = int(litellm.get_model_info(model).get("max_input_tokens"))
-            except Exception:
-                continue
-            if theirs == ours:
-                dups.append((model, ours))
-        assert not dups, f"MAX_TOKENS entries that exactly duplicate LiteLLM: {sorted(dups)}"
+        monkeypatch.setattr(token_budget, "get_settings", lambda: _settings(custom_model_max_tokens=200000))
+        assert get_max_tokens(model) == 200000

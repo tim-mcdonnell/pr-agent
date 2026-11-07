@@ -9,7 +9,7 @@ import yaml
 from pydantic import ValidationError
 
 from pr_agent.algo.ai_handlers.base_ai_handler import BaseAiHandler
-from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
+from pr_agent.algo.ai_handlers.claude_agent_sdk_handler import ClaudeAgentSDKHandler
 from pr_agent.algo.artifacts import get_artifact_context
 from pr_agent.algo.comment_identity import PRDescriptionHeader, PRDescriptionIdentity
 from pr_agent.algo.output_models import PRDescriptionAssembled
@@ -66,7 +66,7 @@ class PRDescription:
     COLLAPSIBLE_FILE_LIST_THRESHOLD = 8
 
     def __init__(self, pr_url: str, args: list = None,
-                 ai_handler: partial[BaseAiHandler,] = LiteLLMAIHandler):
+                 ai_handler: partial[BaseAiHandler,] = ClaudeAgentSDKHandler):
         """
         Initialize the PRDescription object with the necessary attributes and objects for generating a PR description
         using an AI model.

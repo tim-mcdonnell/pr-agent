@@ -8,13 +8,17 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from pr_agent.algo import run_details
+from pr_agent.algo import token_handler as token_handler_module
+from pr_agent.algo.token_budget import MESSAGE_FRAMING_TOKEN_ALLOWANCE, REPLY_FRAMING_TOKEN_ALLOWANCE
 from pr_agent.config_loader import get_settings
 from pr_agent.tools import pr_help_message
 from pr_agent.tools.pr_help_message import PRHelpMessage
 from tests.unittest._settings_helpers import restore_settings, snapshot_settings
 
-PRIMARY = "gpt-4o"
-BACKUP = "gpt-4o-mini"
+PRIMARY = "opus"
+BACKUP = "sonnet"
+# _count_prompt_tokens adds this allowance for the system and user messages and the reply.
+FRAMING = 2 * MESSAGE_FRAMING_TOKEN_ALLOWANCE + REPLY_FRAMING_TOKEN_ALLOWANCE
 ANSWER = (
     "response: Enable automatic review in the repository settings.\n"
     "relevant_sections:\n"
@@ -33,14 +37,12 @@ def help_tool(tmp_path, monkeypatch):
         "config.max_output_tokens": 0,
         "config.model_token_count_estimate_factor": 0,
         "model_routing.enable": False,
-        # Keep this regression independent of the separate OpenAI-key gate fix.
-        "openai.key": "test-only-key",
         "openai.deployment_id": "primary-deployment",
         "openai.fallback_deployments": ["backup-deployment"],
     }
     snapshot = snapshot_settings([
         *overrides, "pr_help_prompts.system", "pr_help_prompts.user",
-        "litellm.custom_llm_provider", "config.custom_model_max_tokens",
+        "config.custom_model_max_tokens",
     ])
     for key, value in overrides.items():
         get_settings().set(key, value)
@@ -71,8 +73,18 @@ def attempted_models(tool):
     return [call.kwargs["model"] for call in tool.ai_handler.chat_completion.await_args_list]
 
 
-def count_message_characters(*, messages, **_kwargs):
-    return sum(len(message["content"]) for message in messages)
+class CharacterEncoder:
+    """Encode one token per character so budgets can be stated in characters."""
+
+    @staticmethod
+    def encode(text, disallowed_special=()):
+        return list(text)
+
+
+def count_characters(monkeypatch):
+    """Make estimate_tokens count characters (the fixture sets a zero estimate factor)."""
+    monkeypatch.setattr(token_handler_module.TokenEncoder, "get_token_encoder",
+                        lambda *_args, **_kwargs: CharacterEncoder())
 
 
 @pytest.fixture
@@ -91,7 +103,7 @@ def selectable_docs(help_tool, monkeypatch):
     monkeypatch.setattr(pr_help_message, "_get_help_docs_root", lambda: root)
     get_settings().set("pr_help_prompts.system", "system")
     get_settings().set("pr_help_prompts.user", "{{ question }}\n{{ snippets }}")
-    monkeypatch.setattr(pr_help_message, "token_counter", count_message_characters)
+    count_characters(monkeypatch)
     prompt, available = pr_help_message._load_help_docs_prompt()
     tool.vars["snippets"] = str(prompt)
     tool._available_docs_files = available
@@ -108,7 +120,7 @@ def test_constrained_question_retains_complete_matching_document(selectable_docs
     tool.vars["question"] = question
     # Count the normalized request, including overhead added by the handler.
     tool.ai_handler.normalize_request_prompts = lambda model, system, user: (system, "normalized:" + user)
-    monkeypatch.setattr(tool, "_get_prompt_budget", lambda model: 210)
+    monkeypatch.setattr(tool, "_get_prompt_budget", lambda model: 210 + FRAMING)
 
     system, user, fitted = tool._fit_prompts(tool.vars, BACKUP)
 
@@ -137,7 +149,7 @@ def test_no_unique_fitting_document_preserves_baseline_order(selectable_docs, mo
         raw, tool._available_docs_files = pr_help_message._load_help_docs_prompt()
         tool.vars["snippets"] = raw
     tool.vars["question"] = question
-    monkeypatch.setattr(tool, "_get_prompt_budget", lambda model: 210)
+    monkeypatch.setattr(tool, "_get_prompt_budget", lambda model: 210 + FRAMING)
     with_selection = tool._fit_prompts(tool.vars, BACKUP)
     monkeypatch.setattr(pr_help_message, "_select_help_doc", lambda *_args: None)
 
@@ -149,7 +161,7 @@ async def test_fallback_selects_question_document_and_limits_citations(selectabl
     tool, raw, _ = selectable_docs
     tool.question_str = "How do I install Azure?"
     tool.vars["question"] = tool.question_str
-    limits = {PRIMARY: 10_000, BACKUP: 180}
+    limits = {PRIMARY: 10_000, BACKUP: 180 + FRAMING}
     monkeypatch.setattr(tool, "_get_prompt_budget", lambda model: limits[model])
     tool.ai_handler.chat_completion.side_effect = [TimeoutError("primary unavailable"), (
         "response: Install the Azure integration.\nrelevant_sections:\n"
@@ -163,7 +175,7 @@ async def test_fallback_selects_question_document_and_limits_citations(selectabl
     primary, backup = [call.kwargs for call in tool.ai_handler.chat_completion.await_args_list]
     assert raw in primary["user"]
     assert backup["user"].split("==file name==", 1)[1].startswith("\n\n/installation/azure.md")
-    assert len(backup["system"]) + len(backup["user"]) <= limits[BACKUP]
+    assert len(backup["system"]) + len(backup["user"]) + FRAMING <= limits[BACKUP]
     [call] = tool.git_provider.publish_comment.call_args_list
     assert "https://docs.pr-agent.ai/installation/azure/" in call.args[0]
     assert "https://docs.pr-agent.ai/tools/review/" not in call.args[0]
@@ -276,21 +288,15 @@ async def test_each_attempt_fits_complete_prompt_for_its_model(help_tool, monkey
     get_settings().set("pr_help_prompts.system", "system")
     get_settings().set("pr_help_prompts.user", "question={{ question }}\nsnippets={{ snippets }}")
     get_settings().set("config.max_output_tokens", 20)
-    limits = {PRIMARY: 2_000, BACKUP: 260}
+    limits = {PRIMARY: 2_000, BACKUP: 120 + FRAMING + 20}
     limit_calls = []
-    counted_models = []
 
     def model_limit(model, ignore_max_model_tokens=False):
         limit_calls.append((model, ignore_max_model_tokens))
         return limits[model]
 
-    def model_token_count(*, model, messages):
-        counted_models.append(model)
-        character_count = count_message_characters(messages=messages)
-        return character_count if model == PRIMARY else character_count * 2
-
     monkeypatch.setattr(pr_help_message, "get_max_tokens", model_limit)
-    monkeypatch.setattr(pr_help_message, "token_counter", model_token_count)
+    count_characters(monkeypatch)
     tool.ai_handler.chat_completion.side_effect = [TimeoutError("primary unavailable"), (ANSWER, "stop")]
 
     await tool.run()
@@ -304,11 +310,9 @@ async def test_each_attempt_fits_complete_prompt_for_its_model(help_tool, monkey
     assert "...(truncated)" in backup_prompt
     assert "==file name==" in backup_prompt
     assert "/tools/review.md" in backup_prompt
-    assert 2 * (len(backup_prompt) + len("system")) <= limits[BACKUP] - 20
+    assert len(backup_prompt) + len("system") + FRAMING <= limits[BACKUP] - 20
     assert "A" * 600 in tool.vars["snippets"]
     assert limit_calls == [(PRIMARY, True), (BACKUP, True)]
-    assert PRIMARY in counted_models
-    assert BACKUP in counted_models
     assert details.model_used == BACKUP
 
 
@@ -326,10 +330,10 @@ async def test_fallback_only_publishes_sources_from_complete_fitted_documents(he
     get_settings().set("pr_help_prompts.user", "{{ snippets }}")
     limits = {
         PRIMARY: 10_000,
-        BACKUP: len(review_section) + len(pr_help_message.TRUNCATION_MARKER) + 1,
+        BACKUP: len(review_section) + len(pr_help_message.TRUNCATION_MARKER) + 1 + FRAMING,
     }
     monkeypatch.setattr(tool, "_get_prompt_budget", lambda model: limits[model])
-    monkeypatch.setattr(pr_help_message, "token_counter", count_message_characters)
+    count_characters(monkeypatch)
     tool.ai_handler.chat_completion.side_effect = [
         TimeoutError("primary unavailable"),
         (
@@ -465,7 +469,6 @@ def test_prompt_budget_uses_handler_reported_output_limit(help_tool, monkeypatch
 @pytest.mark.parametrize("reserve, expected", [(4096, 922000), (128000, 922000), (200000, 850000)])
 def test_help_budget_honors_native_gpt6_input_ceiling(help_tool, monkeypatch, model, reserve, expected):
     tool, _, _ = help_tool
-    get_settings().set("litellm.custom_llm_provider", "openai")
     get_settings().set("config.custom_model_max_tokens", 0)
     tool.ai_handler.get_output_token_reserve = Mock(return_value=reserve)
 
@@ -507,72 +510,46 @@ def test_failing_handler_output_limit_falls_back_to_config(help_tool, monkeypatc
 @pytest.mark.parametrize(
     ("estimate_factor", "expected"),
     [
-        (-0.5, 53),
-        (0, 53),
-        (None, 53),
-        ("invalid", 53),
-        (float("nan"), 53),
-        (float("inf"), 53),
-        (True, 53),
-        (0.3, ceil(53 * 1.3)),
+        (0, 3 + 2),
+        (0.3, ceil(3 * 1.3) + ceil(2 * 1.3)),
+        (0.7, ceil(3 * 1.7) + ceil(2 * 1.7)),
+        (-0.5, ceil(3 * 0.5) + ceil(2 * 0.5)),
+        # An unusable factor falls back to the default 0.7.
+        (-1, ceil(3 * 1.7) + ceil(2 * 1.7)),
+        (None, ceil(3 * 1.7) + ceil(2 * 1.7)),
+        ("invalid", ceil(3 * 1.7) + ceil(2 * 1.7)),
+        (float("nan"), ceil(3 * 1.7) + ceil(2 * 1.7)),
+        (float("inf"), ceil(3 * 1.7) + ceil(2 * 1.7)),
+        (True, ceil(3 * 1.7) + ceil(2 * 1.7)),
     ],
 )
-def test_local_prompt_estimate_never_reduces_encoded_content(
+def test_local_prompt_estimate_scales_each_prompt_by_the_claude_factor(
     help_tool, monkeypatch, estimate_factor, expected
 ):
     tool, _, _ = help_tool
-
-    class CharacterEncoder:
-        @staticmethod
-        def encode(text, disallowed_special=()):
-            return list(text)
-
     get_settings().set("config.model_token_count_estimate_factor", estimate_factor)
-    monkeypatch.setattr(pr_help_message, "token_counter", Mock(side_effect=RuntimeError("counter unavailable")),
-                        raising=False)
-    monkeypatch.setattr(pr_help_message.TokenEncoder, "get_token_encoder", lambda _model: CharacterEncoder(),
-                        raising=False)
+    count_characters(monkeypatch)
 
-    assert tool._count_prompt_tokens(PRIMARY, "abc", "de") == expected
+    assert tool._count_prompt_tokens(PRIMARY, "abc", "de") == expected + FRAMING
 
 
 def test_local_prompt_estimate_uses_raw_estimate_on_overflow(help_tool, monkeypatch):
     tool, _, _ = help_tool
-
-    class CharacterEncoder:
-        @staticmethod
-        def encode(text, disallowed_special=()):
-            return list(text)
-
     get_settings().set("config.model_token_count_estimate_factor", 1e308)
-    monkeypatch.setattr(pr_help_message, "token_counter", Mock(side_effect=RuntimeError("counter unavailable")))
-    monkeypatch.setattr(pr_help_message.TokenEncoder, "get_token_encoder", lambda _model: CharacterEncoder())
+    count_characters(monkeypatch)
 
-    assert tool._count_prompt_tokens(PRIMARY, "abc", "de") == 53
+    assert tool._count_prompt_tokens(PRIMARY, "abc", "de") == 3 + 2 + FRAMING
 
 
-@pytest.mark.parametrize("counter_mode", ["error", "zero", "boolean", "non_integer"])
-async def test_unusable_model_count_uses_local_estimate_before_provider_call(
-    help_tool, monkeypatch, counter_mode
-):
+@pytest.mark.parametrize("estimate_factor", [0, 0.7])
+async def test_local_estimate_fits_the_prompt_before_provider_call(help_tool, monkeypatch, estimate_factor):
     tool, _, _ = help_tool
     tool.vars = {"question": "q", "snippets": "A" * 100}
     get_settings().set("pr_help_prompts.system", "")
     get_settings().set("pr_help_prompts.user", "{{ snippets }}")
-    monkeypatch.setattr(tool, "_get_prompt_budget", lambda _model: 70)
-
-    class CharacterEncoder:
-        @staticmethod
-        def encode(text, disallowed_special=()):
-            return list(text)
-
-    def unusable_count(**_kwargs):
-        if counter_mode == "error":
-            raise RuntimeError("counter unavailable")
-        return {"zero": 0, "boolean": True, "non_integer": 1.5}[counter_mode]
-
-    monkeypatch.setattr(pr_help_message, "token_counter", unusable_count)
-    monkeypatch.setattr(pr_help_message.TokenEncoder, "get_token_encoder", lambda _model: CharacterEncoder())
+    get_settings().set("config.model_token_count_estimate_factor", estimate_factor)
+    monkeypatch.setattr(tool, "_get_prompt_budget", lambda _model: 100)
+    count_characters(monkeypatch)
     tool.ai_handler.chat_completion.return_value = ANSWER, "stop"
 
     await tool._prepare_prediction(PRIMARY)
@@ -580,20 +557,13 @@ async def test_unusable_model_count_uses_local_estimate_before_provider_call(
     tool.ai_handler.chat_completion.assert_awaited_once()
     user_prompt = tool.ai_handler.chat_completion.await_args.kwargs["user"]
     assert "...(truncated)" in user_prompt
-    assert len(user_prompt) + 48 <= 70
+    assert ceil(len(user_prompt) * (1 + estimate_factor)) + FRAMING <= 100
 
 
 async def test_local_estimate_overflow_still_tries_providers(help_tool, monkeypatch):
     tool, details, _ = help_tool
-
-    class CharacterEncoder:
-        @staticmethod
-        def encode(text, disallowed_special=()):
-            return list(text)
-
     get_settings().set("config.model_token_count_estimate_factor", 1e308)
-    monkeypatch.setattr(pr_help_message, "token_counter", Mock(side_effect=RuntimeError("counter unavailable")))
-    monkeypatch.setattr(pr_help_message.TokenEncoder, "get_token_encoder", lambda _model: CharacterEncoder())
+    count_characters(monkeypatch)
     tool._prepare_prediction = AsyncMock(wraps=tool._prepare_prediction)
     tool.ai_handler.chat_completion.side_effect = [TimeoutError("primary unavailable"), (ANSWER, "stop")]
 
@@ -605,47 +575,20 @@ async def test_local_estimate_overflow_still_tries_providers(help_tool, monkeypa
     assert details.model_used == BACKUP
 
 
-async def test_empty_claude_system_prompt_is_normalized_before_fitting(help_tool, monkeypatch):
-    tool, _, _ = help_tool
-    model = "anthropic/claude-sonnet-4-5"
-    tool.vars = {"question": "q", "snippets": "A" * 100}
-    get_settings().set("pr_help_prompts.system", "")
-    get_settings().set("pr_help_prompts.user", "{{ snippets }}")
-    monkeypatch.setattr(tool, "_get_prompt_budget", lambda _model: 80)
-    tool.ai_handler.normalize_request_prompts = pr_help_message.LiteLLMAIHandler.normalize_request_prompts
-    counted_system_prompts = []
-
-    def count_normalized_prompts(*, messages, **_kwargs):
-        counted_system_prompts.append(messages[0]["content"])
-        return count_message_characters(messages=messages)
-
-    monkeypatch.setattr(pr_help_message, "token_counter", count_normalized_prompts)
-    tool.ai_handler.chat_completion.return_value = ANSWER, "stop"
-
-    await tool._prepare_prediction(model)
-
-    assert counted_system_prompts
-    assert set(counted_system_prompts) == {"No system prompt provided"}
-    call = tool.ai_handler.chat_completion.await_args
-    assert call.kwargs["system"] == "No system prompt provided"
-    assert "...(truncated)" in call.kwargs["user"]
-
-
 def test_prompt_fitting_checks_smallest_nonempty_prefix(help_tool, monkeypatch):
     tool, _, _ = help_tool
     get_settings().set("pr_help_prompts.system", "")
     get_settings().set("pr_help_prompts.user", "{{ snippets }}")
     monkeypatch.setattr(tool, "_get_prompt_budget", lambda _model: 10)
 
-    def discontinuous_count(*, messages, **_kwargs):
-        snippets = messages[1]["content"]
+    def discontinuous_count(model, system_prompt, snippets):
         if snippets in ("", pr_help_message.TRUNCATION_MARKER):
             return 1
         if snippets == f"A{pr_help_message.TRUNCATION_MARKER}":
             return 10
         return 1_000
 
-    monkeypatch.setattr(pr_help_message, "token_counter", discontinuous_count)
+    monkeypatch.setattr(tool, "_count_prompt_tokens", discontinuous_count)
 
     _, user_prompt, fitted_snippets = tool._fit_prompts({"question": "q", "snippets": "ABC"}, PRIMARY)
 
@@ -659,15 +602,14 @@ async def test_marker_only_prompt_is_sent_when_no_document_character_fits(help_t
     get_settings().set("pr_help_prompts.user", "{{ snippets }}")
     monkeypatch.setattr(tool, "_get_prompt_budget", lambda _model: 10)
 
-    def marker_only_count(*, messages, **_kwargs):
-        snippets = messages[1]["content"]
+    def marker_only_count(model, system_prompt, snippets):
         if snippets == "":
             return 1
         if snippets == pr_help_message.TRUNCATION_MARKER:
             return 5
         return 1_000
 
-    monkeypatch.setattr(pr_help_message, "token_counter", marker_only_count)
+    monkeypatch.setattr(tool, "_count_prompt_tokens", marker_only_count)
     tool.ai_handler.chat_completion.return_value = ANSWER, "stop"
 
     await tool.run()
@@ -690,7 +632,7 @@ async def test_fixed_prompt_overhead_skips_model_call_and_tries_larger_fallback(
 
     monkeypatch.setattr(pr_help_message, "get_max_tokens",
                         lambda model, ignore_max_model_tokens=False: limits[model])
-    monkeypatch.setattr(pr_help_message, "token_counter", count_message_characters, raising=False)
+    count_characters(monkeypatch)
     tool._prepare_prediction = AsyncMock(wraps=tool._prepare_prediction)
     tool.ai_handler.chat_completion.return_value = ANSWER, "stop"
 

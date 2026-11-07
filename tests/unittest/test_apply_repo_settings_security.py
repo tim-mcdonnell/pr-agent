@@ -68,8 +68,7 @@ SNAPSHOT_SECTIONS = (
     "OLLAMA",
     "MOONSHOT",
     "DATABRICKS",
-    "OPENROUTER",
-    "LITELLM",
+    "CLAUDE_CODE",
     "GITHUB",
     "BITBUCKET",
     "GITLAB",
@@ -483,7 +482,6 @@ def test_restore_settings_sections_removes_section_created_after_snapshot():
         ("ollama", "api_base"),
         ("moonshot", "api_base"),
         ("databricks", "api_base"),
-        ("openrouter", "api_base"),
         ("linear", "api_token"),
     ],
 )
@@ -664,49 +662,36 @@ jira_requirements_field = "customfield_10127"
     assert CliArgs.validate_user_args(['--jira={project_keys: ["HR"]}'])[0] is False
 
 
-def test_litellm_extra_headers_is_host_only_key():
-    assert is_repo_host_only_key("litellm", "extra_headers")
-    assert is_repo_host_only_key("LITELLM", "EXTRA_HEADERS")
+@pytest.mark.parametrize("key", ["repo_path", "explore_repo", "explore_commands", "max_turns"])
+def test_comment_args_cannot_set_claude_code_keys(key):
+    assert CliArgs.validate_user_args([f"--claude_code.{key}=attacker"])[0] is False
 
 
-def test_comment_args_cannot_set_litellm_extra_headers():
-    assert CliArgs.validate_user_args(['--litellm.extra_headers={"X-Tenant":"attacker"}'])[0] is False
-
-
-def test_repo_settings_cannot_override_litellm_extra_headers(monkeypatch, settings_snapshot):
-    # The headers ride on every model request, so on a shared gateway the reviewed repository
-    # must not choose them.
+def test_repo_settings_cannot_override_claude_code_section(monkeypatch, settings_snapshot):
+    # repo_path bounds what an exploring model may read on the host, so the reviewed repository
+    # must not choose it or widen the exploration settings.
     provider = FakeGitProvider(repo_settings_bytes=b"""
-[litellm]
-extra_headers = '{"X-Tenant":"attacker"}'
+[claude_code]
+repo_path = "/"
+explore_repo = true
+max_turns = 500
 """)
     _install_provider(monkeypatch, provider)
 
     settings = get_settings()
     settings.set("config.use_repo_settings_file", True)
-    settings.set("litellm.extra_headers", '{"X-Tenant":"operator"}')
+    settings.set("claude_code.repo_path", "/srv/checkout")
+    settings.set("claude_code.explore_repo", False)
+    settings.set("claude_code.max_turns", 20)
 
     apply_repo_settings("https://example.com/owner/repo/pull/1")
 
-    litellm_section = {k.lower(): v for k, v in _section(settings, "litellm").items()}
-    assert litellm_section.get("extra_headers") == '{"X-Tenant":"operator"}'
-
-
-def test_repo_settings_still_apply_other_litellm_keys(monkeypatch, settings_snapshot):
-    provider = FakeGitProvider(repo_settings_bytes=b"[litellm]\ndrop_params = true\n")
-    captured = _install_provider(monkeypatch, provider)
-
-    settings = get_settings()
-    settings.set("config.use_repo_settings_file", True)
-    settings.set("litellm.drop_params", False)
-
-    apply_repo_settings("https://example.com/owner/repo/pull/1")
-
-    assert captured["errors"] is None
-    litellm_section = {k.lower(): v for k, v in _section(settings, "litellm").items()}
-    assert litellm_section.get("drop_params") is True
-    assert not is_repo_host_only_key("litellm", "drop_params")
-    assert CliArgs.validate_user_args(["--litellm.drop_params=true"])[0] is True
+    claude_code = {k.lower(): v for k, v in _section(settings, "claude_code").items()}
+    assert claude_code.get("repo_path") == "/srv/checkout"
+    assert claude_code.get("explore_repo") is False
+    assert claude_code.get("max_turns") == 20
+    for key in ("repo_path", "explore_repo", "max_turns"):
+        assert is_repo_host_only_key("claude_code", key)
 
 
 @pytest.mark.parametrize(

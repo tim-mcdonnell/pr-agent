@@ -9,7 +9,7 @@ from datetime import datetime
 from functools import partial
 
 from pr_agent.algo.ai_handlers.base_ai_handler import BaseAiHandler
-from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
+from pr_agent.algo.ai_handlers.claude_agent_sdk_handler import ClaudeAgentSDKHandler
 from pr_agent.algo.artifacts import get_artifact_context, prompt_boundary_markers
 from pr_agent.algo.code_replacement import python_replacement_compiles, reindent_to_line
 from pr_agent.algo.comment_identity import (
@@ -264,7 +264,7 @@ def _edit_comment_safely(git_provider, comment, body: str) -> bool:
 
 class PRCodeSuggestions:
     def __init__(self, pr_url: str, cli_mode=False, args: list = None,
-                 ai_handler: partial[BaseAiHandler,] = LiteLLMAIHandler):
+                 ai_handler: partial[BaseAiHandler,] = ClaudeAgentSDKHandler):
 
         self.git_provider = get_git_provider_with_context(pr_url)
         self.pr_url = pr_url  # set early so the no-op log line in `run()` can reference it

@@ -1,4 +1,4 @@
-"""Verify the runner's model-key gate while allowing bare static commands (#4324)."""
+"""Verify the runner's Claude-credential gate while allowing bare static commands (#4324)."""
 
 import copy
 import json
@@ -9,10 +9,20 @@ from starlette_context import request_cycle_context
 
 from pr_agent import doctor, git_providers
 from pr_agent.agent import pr_agent as pr_agent_module
+from pr_agent.algo.ai_handlers.claude_agent_sdk_handler import ClaudeAgentSDKHandler
 from pr_agent.config_loader import get_settings
 from pr_agent.git_providers.github_provider import GithubProvider
 from pr_agent.servers import github_action_runner
 from tests.unittest._settings_helpers import restore_settings, snapshot_settings
+
+ACTION_INPUTS = (*github_action_runner.ACTION_CREDENTIAL_INPUTS, "INPUT_MODEL", "INPUT_FALLBACK_MODELS")
+MISSING_CREDENTIAL = ("claude", doctor.CLAUDE_CREDENTIAL_ENV_VARS)
+GATE_MESSAGE = (
+    "Stopping before any tool runs: no Claude credential. "
+    "Set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN "
+    "(or the action's claude_code_oauth_token input). "
+    "'pr-agent doctor' preflights the same check by hand."
+)
 
 
 @pytest.fixture
@@ -23,8 +33,10 @@ def action_env_factory(monkeypatch, tmp_path):
         monkeypatch.setenv("GITHUB_EVENT_NAME", event_name)
         monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
         monkeypatch.setenv("GITHUB_TOKEN", "token")
-        monkeypatch.delenv("OPENAI_KEY", raising=False)
-        monkeypatch.delenv("OPENAI.KEY", raising=False)
+        # setenv first so monkeypatch restores (removes) a value _apply_action_inputs() may export.
+        for name in (*doctor.CLAUDE_CREDENTIAL_ENV_VARS, *ACTION_INPUTS):
+            monkeypatch.setenv(name, "")
+            monkeypatch.delenv(name)
 
     return _factory
 
@@ -62,7 +74,7 @@ def pr_comment_env(action_env_factory):
 
 @pytest.mark.parametrize("event_name", ["issue_comment", "pull_request_review_comment"])
 @pytest.mark.parametrize("body", ["/help", "/config", "/settings", " \t/HELP \n", " /CoNfIg \t", "\n/SETTINGS "])
-async def test_static_pr_comments_render_without_model_key(monkeypatch, pr_comment_env, event_name, body):
+async def test_static_pr_comments_render_without_claude_credential(monkeypatch, pr_comment_env, event_name, body):
     class StaticProvider(GithubProvider):
         def __init__(self, pr_url=None):
             super().__init__(None)
@@ -75,12 +87,12 @@ async def test_static_pr_comments_render_without_model_key(monkeypatch, pr_comme
         def get_request_policy_metadata(self, required_fields):
             return {"title": "Test PR"}
 
-    gate = Mock(return_value=("openai", ("OPENAI_API_KEY",)))
+    gate = Mock(return_value=MISSING_CREDENTIAL)
     ai_init = Mock(side_effect=AssertionError("Static commands must not initialize an AI handler"))
     monkeypatch.setattr(github_action_runner, "missing_provider_key_env_vars", gate)
     monkeypatch.setattr(github_action_runner, "apply_repo_settings", lambda url: None)
     monkeypatch.setattr(pr_agent_module, "apply_repo_settings", lambda url: None)
-    monkeypatch.setattr(pr_agent_module.LiteLLMAIHandler, "__init__", ai_init)
+    monkeypatch.setattr(ClaudeAgentSDKHandler, "__init__", ai_init)
     monkeypatch.setitem(git_providers._GIT_PROVIDERS, "github", StaticProvider)
     monkeypatch.setitem(get_settings().config, "git_provider", "github")
     monkeypatch.setitem(get_settings().config, "publish_output", True)
@@ -98,15 +110,15 @@ async def test_static_pr_comments_render_without_model_key(monkeypatch, pr_comme
 
 @pytest.mark.parametrize("event_name", ["issue_comment", "pull_request_review_comment"])
 @pytest.mark.parametrize("body", ["/help How do I configure reviews?", "/review", "/configuration", "/config typo"])
-async def test_other_pr_commands_still_require_model_key(monkeypatch, pr_comment_env, event_name, body):
+async def test_other_pr_commands_still_require_claude_credential(monkeypatch, pr_comment_env, event_name, body):
     monkeypatch.setattr(github_action_runner, "apply_repo_settings", lambda url: None)
     monkeypatch.setattr(
         github_action_runner, "missing_provider_key_env_vars",
-        lambda: ("openai", ("OPENAI_API_KEY",)),
+        lambda: MISSING_CREDENTIAL,
     )
     pr_comment_env(body, event_name)
 
-    with pytest.raises(SystemExit, match="Stopping before any tool runs.*OPENAI_API_KEY"):
+    with pytest.raises(SystemExit, match="Stopping before any tool runs.*CLAUDE_CODE_OAUTH_TOKEN"):
         await github_action_runner.run_action()
 
 
@@ -119,30 +131,56 @@ async def test_static_pr_comments_still_require_github_token(monkeypatch, pr_com
         await github_action_runner.run_action()
 
 
-async def test_missing_key_stops_before_tools_naming_the_env_variable(
+async def test_missing_credential_stops_before_tools_naming_the_env_variables(
     monkeypatch, action_env
 ):
     monkeypatch.setattr(
         github_action_runner, "missing_provider_key_env_vars",
-        lambda: ("openai", ("OPENAI_API_KEY",)),
+        lambda: MISSING_CREDENTIAL,
     )
 
-    with pytest.raises(SystemExit, match="Stopping before any tool runs.*OPENAI_API_KEY"):
+    with pytest.raises(SystemExit, match="Stopping before any tool runs.*CLAUDE_CODE_OAUTH_TOKEN"):
         await github_action_runner.run_action()
 
 
-async def test_placeholder_without_known_env_names_has_actionable_guidance(monkeypatch, action_env):
-    monkeypatch.setattr(
-        github_action_runner, "missing_provider_key_env_vars",
-        lambda: ("unlisted_provider", ()),
-    )
+async def test_real_gate_stops_without_any_claude_credential(monkeypatch, action_env, capsys):
+    dispatches = []
+
+    async def run_tool(*args):
+        dispatches.append(args)
+
+    monkeypatch.setattr(github_action_runner, "apply_repo_settings", lambda url: None)
+    monkeypatch.setattr(github_action_runner, "enforce_request_policy", lambda *args, **kwargs: True)
+    monkeypatch.setattr(github_action_runner, "_run_auto_tool", run_tool)
 
     with pytest.raises(SystemExit) as error:
         await github_action_runner.run_action()
 
-    message = str(error.value)
-    assert "Replace the placeholder key in provider settings or workflow env." in message
-    assert "Set  in this workflow" not in message
+    assert str(error.value) == GATE_MESSAGE
+    assert dispatches == []
+
+
+@pytest.mark.parametrize(
+    "credential", [*doctor.CLAUDE_CREDENTIAL_ENV_VARS, *github_action_runner.ACTION_CREDENTIAL_INPUTS],
+)
+async def test_any_claude_credential_or_action_input_passes_the_real_gate(monkeypatch, action_env, credential):
+    secret = "synthetic-claude-credential-not-for-output"
+    dispatches = []
+
+    async def run_tool(*args):
+        dispatches.append(args)
+
+    monkeypatch.setenv(credential, secret)
+    monkeypatch.setattr(github_action_runner, "apply_repo_settings", lambda url: None)
+    monkeypatch.setattr(github_action_runner, "enforce_request_policy", lambda *args, **kwargs: True)
+    monkeypatch.setattr(github_action_runner, "_run_auto_tool", run_tool)
+    monkeypatch.setattr(github_action_runner, "_inject_artifact_context", lambda: None)
+
+    with request_cycle_context({"settings": copy.deepcopy(get_settings())}):
+        await github_action_runner.run_action()
+
+    assert doctor.missing_provider_key_env_vars() is None
+    assert dispatches
 
 
 async def test_repository_settings_are_applied_before_key_gate(monkeypatch, action_env):
@@ -153,7 +191,7 @@ async def test_repository_settings_are_applied_before_key_gate(monkeypatch, acti
     )
     monkeypatch.setattr(
         github_action_runner, "missing_provider_key_env_vars",
-        lambda: order.append("gate") or ("openai", ("OPENAI_API_KEY",)),
+        lambda: order.append("gate") or MISSING_CREDENTIAL,
     )
     monkeypatch.setattr(
         github_action_runner, "get_setting_or_env", lambda key, default=None: default,
@@ -205,7 +243,7 @@ async def test_repository_settings_are_applied_before_key_gate_on_comment_and_wo
     )
     monkeypatch.setattr(
         github_action_runner, "missing_provider_key_env_vars",
-        lambda: order.append("gate") or ("openai", ("OPENAI_API_KEY",)),
+        lambda: order.append("gate") or MISSING_CREDENTIAL,
     )
     monkeypatch.setattr(
         github_action_runner, "get_setting_or_env", lambda key, default=None: default,
@@ -249,7 +287,7 @@ async def test_events_without_a_pr_skip_the_gate(
     )
     monkeypatch.setattr(
         github_action_runner, "missing_provider_key_env_vars",
-        lambda: calls.append("gate") or ("openai", ("OPENAI_API_KEY",)),
+        lambda: calls.append("gate") or MISSING_CREDENTIAL,
     )
     monkeypatch.setattr(
         github_action_runner, "get_setting_or_env", lambda key, default=None: default,
@@ -285,7 +323,7 @@ async def test_ignored_pr_comments_skip_repository_settings_and_key_gate(
     monkeypatch.setattr(github_action_runner, "apply_repo_settings", lambda url: calls.append("repo_settings"))
     monkeypatch.setattr(
         github_action_runner, "missing_provider_key_env_vars",
-        lambda: calls.append("gate") or ("openai", ("OPENAI_API_KEY",)),
+        lambda: calls.append("gate") or MISSING_CREDENTIAL,
     )
     pr = {"html_url": "https://github.com/owner/repo/pull/1", "url": "https://api.github.com/repos/owner/repo/pulls/1"}
     event = {"action": action, "sender": {"type": sender_type}, "comment": {"body": body}}
@@ -337,78 +375,68 @@ async def test_inline_command_comments_keep_setup_before_line_conversion(monkeyp
     assert order == expected
 
 
-@pytest.mark.parametrize("provider", ["watsonx", "watsonx_text"])
-@pytest.mark.parametrize(
-    ("source", "value"),
-    [
-        ("LITELLM.EXTRA_HEADERS.Authorization", ""),
-        ("LITELLM.EXTRA_HEADERS.Authorization", "Bearer"),
-        ("LITELLM.EXTRA_HEADERS.Authorization", "Bearer dummy_key"),
-        ("LITELLM.EXTRA_HEADERS.Authorization", "ZenApiKey dummy_key"),
-        ("WATSONX_TOKEN", "dummy_key"),
-        ("WATSONX_ZENAPIKEY", "dummy_key"),
-    ],
-)
-async def test_watsonx_gate_names_the_override_that_must_be_corrected(
-    monkeypatch, action_env, capsys, provider, source, value,
-):
-    from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
-
-    # Watsonx's authentication checks must not trigger unrelated AWS discovery.
-    monkeypatch.setattr(LiteLLMAIHandler, "_initialize_aws_request_credentials", lambda self, settings: None)
-    settings = get_settings()
-    snapshot = snapshot_settings((
-        "config.model", "litellm.custom_llm_provider", "litellm.extra_headers",
-        "openai.api_type", "openai.org", "watsonx", "watsonx_text",
-        "github.user_token", "github.deployment_type", "github_action_config.enable_output",
-    ))
-    secret = "synthetic-native-key-not-for-diagnostics"
-    dispatches = []
-
-    async def run_tool(*args):
-        dispatches.append(args)
-
-    try:
-        for key in ("watsonx", "watsonx_text"):
-            settings.set(key, {})
-        settings.set("config.model", f"{provider}/ibm/granite-3-8b-instruct")
-        for key in ("litellm.custom_llm_provider", "litellm.extra_headers", "openai.api_type"):
-            settings.set(key, None)
-        for name in ("WATSONX_APIKEY", "WATSONX_API_KEY", "WX_API_KEY", "WATSONX_TOKEN", "WATSONX_ZENAPIKEY"):
-            monkeypatch.delenv(name, raising=False)
-        monkeypatch.setenv("WATSONX_APIKEY", secret)
-        monkeypatch.setenv("WATSONX_URL", "https://watsonx.example")
-        if source == "LITELLM.EXTRA_HEADERS.Authorization":
-            headers = {"authorization": value, "X-Private": secret}
-            if value == "Bearer dummy_key":
-                headers = {"Authorization": "Bearer valid-earlier-entry", **headers}
-            settings.set("litellm.extra_headers", json.dumps(headers))
-        else:
-            monkeypatch.setenv(source, value)
-        monkeypatch.setattr(github_action_runner, "apply_repo_settings", lambda url: None)
-        monkeypatch.setattr(github_action_runner, "enforce_request_policy", lambda *args, **kwargs: True)
-        monkeypatch.setattr(github_action_runner, "_run_auto_tool", run_tool)
-
-        # Use the real handler and shared gate; a valid native key cannot fix an overriding credential.
-        assert doctor.missing_provider_key_env_vars() == (provider, (source,))
-        with pytest.raises(SystemExit) as error:
-            await github_action_runner.run_action()
-        message = str(error.value)
-        if source == "LITELLM.EXTRA_HEADERS.Authorization":
-            assert "last case-insensitive Authorization entry in LITELLM.EXTRA_HEADERS" in message
-        else:
-            assert f"Correct or remove {source}" in message
-        assert "Set WATSONX_API" not in message
-        assert secret not in message
-        assert dispatches == []
-        output = capsys.readouterr()
-        assert secret not in output.out + output.err
-
-        # Removing the indicated source allows the already-present native key to be used.
-        if source == "LITELLM.EXTRA_HEADERS.Authorization":
-            settings.set("litellm.extra_headers", None)
-        else:
-            monkeypatch.delenv(source)
-        assert doctor.missing_provider_key_env_vars() is None
-    finally:
+class TestApplyActionInputs:
+    @pytest.fixture(autouse=True)
+    def clean_inputs(self, monkeypatch):
+        snapshot = snapshot_settings(("config.model", "config.fallback_models"))
+        for name in (*doctor.CLAUDE_CREDENTIAL_ENV_VARS, *ACTION_INPUTS):
+            monkeypatch.setenv(name, "")
+            monkeypatch.delenv(name)
+        yield
         restore_settings(snapshot)
+
+    @pytest.mark.parametrize("input_name, env_name", github_action_runner.ACTION_CREDENTIAL_INPUTS.items())
+    def test_credential_input_is_exported_stripped(self, monkeypatch, input_name, env_name):
+        import os
+
+        monkeypatch.setenv(input_name, "  synthetic-credential \n")
+        github_action_runner._apply_action_inputs()
+        assert os.environ[env_name] == "synthetic-credential"
+
+    @pytest.mark.parametrize("input_name, env_name", github_action_runner.ACTION_CREDENTIAL_INPUTS.items())
+    def test_explicit_env_var_wins_over_the_input(self, monkeypatch, input_name, env_name):
+        import os
+
+        monkeypatch.setenv(env_name, "explicit-env-credential")
+        monkeypatch.setenv(input_name, "input-credential")
+        github_action_runner._apply_action_inputs()
+        assert os.environ[env_name] == "explicit-env-credential"
+
+    @pytest.mark.parametrize("value", ["", "   ", "\n"])
+    def test_empty_inputs_change_nothing(self, monkeypatch, value):
+        import os
+
+        get_settings().set("config.model", "opus")
+        get_settings().set("config.fallback_models", ["sonnet"])
+        for name in ACTION_INPUTS:
+            monkeypatch.setenv(name, value)
+        github_action_runner._apply_action_inputs()
+        assert all(name not in os.environ for name in doctor.CLAUDE_CREDENTIAL_ENV_VARS)
+        assert get_settings().config.model == "opus"
+        assert list(get_settings().config.fallback_models) == ["sonnet"]
+
+    def test_model_inputs_set_model_and_fallbacks(self, monkeypatch):
+        monkeypatch.setenv("INPUT_MODEL", " sonnet[1m] ")
+        monkeypatch.setenv("INPUT_FALLBACK_MODELS", " haiku, ,claude-opus-5-5 ,")
+        github_action_runner._apply_action_inputs()
+        assert get_settings().config.model == "sonnet[1m]"
+        assert list(get_settings().config.fallback_models) == ["haiku", "claude-opus-5-5"]
+
+    async def test_run_action_applies_inputs_before_the_gate(self, monkeypatch, action_env):
+        seen = []
+
+        def gate():
+            seen.append((get_settings().config.model, list(get_settings().config.fallback_models)))
+            return MISSING_CREDENTIAL
+
+        monkeypatch.setenv("INPUT_MODEL", "haiku")
+        monkeypatch.setenv("INPUT_FALLBACK_MODELS", "sonnet")
+        monkeypatch.setattr(github_action_runner, "apply_repo_settings", lambda url: None)
+        monkeypatch.setattr(github_action_runner, "missing_provider_key_env_vars", gate)
+        monkeypatch.setattr(github_action_runner, "enforce_request_policy", lambda *args, **kwargs: True)
+
+        with request_cycle_context({"settings": copy.deepcopy(get_settings())}):
+            with pytest.raises(SystemExit, match="no Claude credential"):
+                await github_action_runner.run_action()
+
+        assert seen == [("haiku", ["sonnet"])]

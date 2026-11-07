@@ -46,7 +46,7 @@ from starlette_context.errors import ContextDoesNotExistError
 
 from pr_agent.algo.setting_utils import normalize_setting_list
 from pr_agent.algo.token_budget import clip_tokens
-from pr_agent.algo.token_handler import TokenEncoder
+from pr_agent.algo.token_handler import estimate_tokens
 from pr_agent.config_loader import get_settings
 from pr_agent.log import get_logger
 
@@ -105,7 +105,7 @@ def _expanded_skill_paths(paths: list[str]) -> tuple[str, ...]:
 
 
 def _count_tokens(text: str) -> int:
-    return len(TokenEncoder.get_token_encoder().encode(text, disallowed_special=()))
+    return estimate_tokens(text)
 
 
 def _gather_resources(skill_md_path: str) -> tuple[SkillResource, ...]:

@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 
 from pr_agent import git_providers
-from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT = REPOSITORY_ROOT / "pyproject.toml"
@@ -113,23 +112,3 @@ def without_google_extra(monkeypatch):
     monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
     # A None entry makes `from google.auth import ...` raise ModuleNotFoundError.
     monkeypatch.setitem(sys.modules, "google.auth", None)
-
-
-def test_litellm_handler_initializes_without_google_extra(without_google_extra):
-    handler = LiteLLMAIHandler()
-
-    assert handler._vertex_credentials is None
-    assert handler._vertex_default_adc is None
-
-
-def test_litellm_handler_snapshots_google_credentials_file_without_google_extra(
-    without_google_extra, monkeypatch, tmp_path
-):
-    credentials_path = tmp_path / "credentials.json"
-    credentials_path.write_text('{"type": "service_account"}')
-    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(credentials_path))
-
-    handler = LiteLLMAIHandler()
-
-    assert handler._vertex_credentials == '{"type": "service_account"}'
-    assert handler._vertex_default_adc is None

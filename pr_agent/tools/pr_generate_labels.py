@@ -4,7 +4,7 @@ from functools import partial
 from pydantic import ValidationError
 
 from pr_agent.algo.ai_handlers.base_ai_handler import BaseAiHandler
-from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
+from pr_agent.algo.ai_handlers.claude_agent_sdk_handler import ClaudeAgentSDKHandler
 from pr_agent.algo.output_models import Labels
 from pr_agent.algo.pr_processing import (
     OUTPUT_BUFFER_TOKENS_HARD_THRESHOLD,
@@ -24,7 +24,7 @@ from pr_agent.log import get_logger
 
 class PRGenerateLabels:
     def __init__(self, pr_url: str, args: list = None,
-                 ai_handler: partial[BaseAiHandler,] = LiteLLMAIHandler):
+                 ai_handler: partial[BaseAiHandler,] = ClaudeAgentSDKHandler):
         """
         Initialize the PRGenerateLabels object with the necessary attributes and objects for generating labels
         corresponding to the PR using an AI model.

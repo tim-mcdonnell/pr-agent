@@ -23,7 +23,7 @@ async def test_reflection_receives_captured_context_as_untrusted_user_data(conte
     result = await tool.self_reflect_on_suggestions(
         [{"suggestion_content": "Preserve the boundary", "existing_code": "a()", "improved_code": "b()"}],
         "@@ -1 +1 @@\n__new hunk__\n1 +b()\n__old hunk__\n-a()",
-        "gpt-4o-mini",
+        "sonnet",
     )
     assert result == "code_suggestions: []"
     call = tool.ai_handler.chat_completion.await_args.kwargs
@@ -49,7 +49,7 @@ async def test_reflection_empty_context_preserves_prompt(captured):
     tool.git_provider = SimpleNamespace(pr=None)
     tool.ai_handler = SimpleNamespace(chat_completion=AsyncMock(return_value=("unchanged", "stop")))
     suggestions = [{"suggestion_content": "Preserve the boundary"}]
-    assert await tool.self_reflect_on_suggestions(suggestions, "complete diff", "gpt-4o-mini") == "unchanged"
+    assert await tool.self_reflect_on_suggestions(suggestions, "complete diff", "sonnet") == "unchanged"
     call = tool.ai_handler.chat_completion.await_args.kwargs
     # Removing the guarded section recreates the original template byte-for-byte.
     template = get_settings().pr_code_suggestions_reflect_prompt.user
@@ -68,17 +68,17 @@ async def test_reflection_empty_context_preserves_prompt(captured):
 async def test_reflection_context_is_counted_in_real_token_budget(monkeypatch):
     import pr_agent.algo.token_budget as token_budget
 
-    monkeypatch.setattr(token_budget, "get_max_tokens", lambda *args, **kwargs: 4000)
+    monkeypatch.setattr(token_budget, "get_max_tokens", lambda *args, **kwargs: 7000)
     tool = PRCodeSuggestions.__new__(PRCodeSuggestions)
     tool.vars = {"extra_instructions": "context " * 5000}
     tool.git_provider = SimpleNamespace(pr=None)
     tool.ai_handler = SimpleNamespace(chat_completion=AsyncMock(return_value=("baseline", "stop")))
     context = tool.vars.pop("extra_instructions")
-    baseline = await tool.self_reflect_on_suggestions([{"suggestion_content": "check"}], "diff", "gpt-4o-mini")
+    baseline = await tool.self_reflect_on_suggestions([{"suggestion_content": "check"}], "diff", "sonnet")
     assert baseline == "baseline"
     tool.ai_handler.chat_completion.reset_mock()
     tool.vars["extra_instructions"] = context
-    assert await tool.self_reflect_on_suggestions([{"suggestion_content": "check"}], "diff", "gpt-4o-mini") == ""
+    assert await tool.self_reflect_on_suggestions([{"suggestion_content": "check"}], "diff", "sonnet") == ""
     tool.ai_handler.chat_completion.assert_not_awaited()
 
 
@@ -98,7 +98,7 @@ async def test_reflection_dedicated_template_uses_captured_not_current_settings(
         tool.git_provider = SimpleNamespace(pr=None)
         tool.ai_handler = SimpleNamespace(chat_completion=AsyncMock(return_value=("response", "stop")))
         result = await tool.self_reflect_on_suggestions(
-            [{"suggestion_content": "check"}], "full diff", "gpt-4o-mini",
+            [{"suggestion_content": "check"}], "full diff", "sonnet",
             dedicated_prompt="pr_code_suggestions_reflect_prompt",
         )
         assert result == "response"
@@ -127,7 +127,7 @@ async def test_reflection_renders_captured_artifact_as_untrusted_user_data():
     result = await tool.self_reflect_on_suggestions(
         [{"suggestion_content": "Handle the boundary mismatch"}],
         "@@ -1 +1 @@\n__new hunk__\n1 +actual()",
-        "gpt-4o-mini",
+        "sonnet",
     )
     assert result == "code_suggestions: []"
     call = tool.ai_handler.chat_completion.await_args.kwargs
@@ -147,7 +147,7 @@ async def test_reflection_omits_artifact_section_when_absent():
     tool.git_provider = SimpleNamespace(pr=None)
     tool.ai_handler = SimpleNamespace(chat_completion=AsyncMock(return_value=("ok", "stop")))
     assert await tool.self_reflect_on_suggestions(
-        [{"suggestion_content": "check"}], "diff", "gpt-4o-mini"
+        [{"suggestion_content": "check"}], "diff", "sonnet"
     ) == "ok"
     user = tool.ai_handler.chat_completion.await_args.kwargs["user"]
     assert "CI artifact label" not in user

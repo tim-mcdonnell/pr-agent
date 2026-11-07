@@ -140,8 +140,7 @@ FORBIDDEN_ARGS = [
     # supplied through comments, even when root repository settings may set them.
     "--pr_reviewer.max_number_of_calls=10",
     "--pr_code_suggestions.parallel_calls=true",
-    '--config.fallback_models=["gpt-4.1"]',
-    "--config.num_retries=10",
+    '--config.fallback_models=["sonnet"]',
     "--pr_update_changelog.push_changelog_changes=true",
     "--pr_questions.resolve_threads=true",
     "--pr_similar_issue.force_update_dataset=true",
@@ -413,9 +412,9 @@ def test_validate_user_args_rejects_forbidden_arg_with_leading_whitespace(prefix
         # update_settings_from_args strips the whitespace around the dot before applying
         # the setting, so validate_user_args must see the same dotted path for every
         # host-only key, not just for the tightly written form
-        "--config. num_retries=10",
-        "--config .num_retries=10",
-        "--config\t.num_retries=10",
+        "--config. ai_timeout=10",
+        "--config .ai_timeout=10",
+        "--config\t.ai_timeout=10",
         "--github. seconds_between_requests=1",
         "--github .seconds_between_writes=1",
         "--github.\tapi_retries=3",
@@ -426,7 +425,7 @@ def test_validate_user_args_rejects_forbidden_arg_with_leading_whitespace(prefix
         "--push_outputs. webhook_url=https://evil.example",
         "--push_outputs .enable=true",
         # the whole-section mapping form with a spaced section name is checked too
-        '--config ={num_retries: 10}',
+        '--config ={ai_timeout: 10}',
         '--push_outputs ={webhook_url: "https://evil.example"}',
         '--skills ={paths: ["/etc"]}',
     ],

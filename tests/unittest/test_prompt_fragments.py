@@ -6,7 +6,7 @@ import pytest
 from jinja2 import Environment, meta, nodes
 from jinja2.exceptions import SecurityError
 
-from pr_agent.algo.prompt_fragments import render_diff_hunk_format, render_skills_prefix
+from pr_agent.algo.prompt_fragments import render_diff_hunk_format
 from pr_agent.config_loader import get_settings
 from pr_agent.tools import pr_add_docs, pr_code_suggestions, pr_reviewer
 from tests.unittest._settings_helpers import restore_settings, snapshot_settings
@@ -325,11 +325,7 @@ def test_review_tools_open_with_the_shared_skills_prefix(prompt_name):
     rendered_prelude = Environment(autoescape=True).from_string(
         _skills_prelude(prompt_name)
     ).render(skills_context="sample skill")
-    assert rendered_prelude == render_skills_prefix(skills_context="sample skill")
-
-
-def test_render_skills_prefix_empty_without_context():
-    assert render_skills_prefix(skills_context="") == ""
+    assert rendered_prelude == Environment(autoescape=True).from_string(fragment).render(skills_context="sample skill")
 
 
 @pytest.mark.parametrize("prompt_name", _SKILLS_PREFIX_TEMPLATES)

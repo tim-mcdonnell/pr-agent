@@ -232,8 +232,8 @@ async def test_commands_through_diff_provider_mocked_llm(
     with request_cycle_context({"settings": copy.deepcopy(get_settings())}):
         for key, value in {
             "config.git_provider": "plain-diff",
-            "config.model": "gpt-4o-mini",
-            "config.model_weak": "gpt-4o-mini",
+            "config.model": "haiku",
+            "config.model_weak": "haiku",
             "config.fallback_models": [],
             "config.repo_context_files": [],
             "config.publish_output": True,
@@ -318,9 +318,9 @@ async def test_publishing_commands_reject_truncated_responses(
     with request_cycle_context({"settings": copy.deepcopy(get_settings())}):
         for key, value in {
             "config.git_provider": "plain-diff",
-            "config.model": "gpt-4o-mini",
-            "config.model_weak": "gpt-4o-mini",
-            "config.fallback_models": ["gpt-4o"],
+            "config.model": "haiku",
+            "config.model_weak": "haiku",
+            "config.fallback_models": ["sonnet"],
             "config.repo_context_files": [],
             "config.publish_output": True,
             "config.publish_output_progress": False,
@@ -344,7 +344,7 @@ async def test_publishing_commands_reject_truncated_responses(
         else:
             assert result is False or command_failed()
 
-    assert [model for model, _ in calls] == ["gpt-4o-mini", "gpt-4o"][:len(finish_reasons)]
+    assert [model for model, _ in calls] == ["haiku", "sonnet"][:len(finish_reasons)]
     assert all("return x + 1" in user for _, user in calls)
     output = capsys.readouterr().out
     assert partial_marker not in output
@@ -390,8 +390,8 @@ async def test_improve_rejects_truncated_responses_through_diff_provider(
     with request_cycle_context({"settings": copy.deepcopy(get_settings())}):
         for key, value in {
             "config.git_provider": "plain-diff",
-            "config.model": "gpt-4o-mini",
-            "config.model_weak": "gpt-4o-mini",
+            "config.model": "haiku",
+            "config.model_weak": "haiku",
             "config.fallback_models": [],
             "config.repo_context_files": [],
             "config.publish_output": True,
@@ -424,7 +424,7 @@ async def test_improve_rejects_truncated_responses_through_diff_provider(
 @pytest.mark.parametrize("decouple_hunks,line_count,max_tokens,remove_calls", [
     pytest.param(True, 1, 32_000, 1, id="decoupled"),
     pytest.param(False, 1, 32_000, 0, id="ordinary-default"),
-    pytest.param(False, 400, 10_000, 1, id="default-numbered-budget-fallback"),
+    pytest.param(False, 250, 10_000, 1, id="default-numbered-budget-fallback"),
 ])
 async def test_improve_preserves_inline_separator_in_model_prompt(
     tmp_path, monkeypatch, decouple_hunks, line_count, max_tokens, remove_calls
@@ -453,7 +453,7 @@ async def test_improve_preserves_inline_separator_in_model_prompt(
     with request_cycle_context({"settings": copy.deepcopy(get_settings())}):
         for key, value in {
             "config.git_provider": "plain-diff",
-            "config.model": "gpt-4o-mini",
+            "config.model": "haiku",
             "config.max_model_tokens": max_tokens,
             "config.fallback_models": [],
             "config.repo_context_files": [],

@@ -82,6 +82,14 @@ PR-Agent is a community-maintained open-source project, with its ongoing develop
 > [!NOTE]
 > **Docker Hub namespace migration.** Releases `0.34.2` and later are published under [`pragent/pr-agent`](https://hub.docker.com/r/pragent/pr-agent). Older releases (up to and including `v0.31`) remain available at the legacy [`codiumai/pr-agent`](https://hub.docker.com/r/codiumai/pr-agent) namespace as a frozen archive — no new images are pushed there. Update any pinned `image:` / `docker pull` / `uses: docker://` references when upgrading to `0.34.2+`.
 
+> [!NOTE]
+> **This fork runs every model call through Claude Code.** It replaces upstream's LiteLLM layer with the
+> [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview), authenticates with a Claude subscription
+> token (`claude setup-token`) or an Anthropic API key, names models with Claude Code slugs (`opus`, `sonnet`, ...),
+> and can let the model read the PR's checkout through read-only tools. See
+> [Claude Code integration](docs/docs/usage-guide/claude_agent_sdk.md). Upstream is
+> [The-PR-Agent/pr-agent](https://github.com/The-PR-Agent/pr-agent); docs.pr-agent.ai links below describe upstream.
+
 ### 🚀 Quick Start for PR-Agent
 
 #### 1. GitHub Action (Recommended)
@@ -93,26 +101,38 @@ Add automated PR reviews to your repository with a simple workflow file:
 name: PR Agent
 on:
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, reopened, ready_for_review]
+  issue_comment:
 jobs:
   pr_agent_job:
+    if: ${{ github.event.sender.type != 'Bot' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
     steps:
+    - uses: actions/checkout@v4  # optional: lets the model read the repository (read-only)
+      with:
+        ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', github.event.issue.number) }}
+        persist-credentials: false
     - name: PR Agent action step
-      uses: the-pr-agent/pr-agent@main
+      uses: tim-mcdonnell/pr-agent@main
+      with:
+        claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        model: ${{ secrets.PR_AGENT_MODEL }}  # optional Claude Code slug, e.g. opus or sonnet
       env:
-        OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
-[Full GitHub Action setup guide](https://docs.pr-agent.ai/installation/github/#run-as-a-github-action)
+[Full GitHub Action setup guide](docs/docs/installation/github.md#run-as-a-github-action)
 
 #### 2. CLI Usage (Local Development)
 
 Run PR-Agent locally on your repository:
 
 ```bash
-pip install "pr-agent[github]"
-export OPENAI_KEY=your_key_here
+pip install "pr-agent[github] @ git+https://github.com/tim-mcdonnell/pr-agent"  # PyPI has upstream, not this fork
+export CLAUDE_CODE_OAUTH_TOKEN=your_token_here  # or use an existing `claude` login
 pr-agent --pr_url https://github.com/owner/repo/pull/123 review
 ```
 Git provider SDKs are optional extras: install the one for your provider ([list](https://docs.pr-agent.ai/installation/locally/#using-pip-package)), or `pr-agent[all]` for every integration.
@@ -142,7 +162,7 @@ Full notes for every release are on the [Releases page](https://github.com/the-p
 **Platform Agnostic**:
 - **Git Providers**: GitHub, GitLab, BitBucket, Azure DevOps, Gitea
 - **Deployment**: CLI, GitHub Actions, Docker, self-hosted, webhooks
-- **AI Models**: OpenAI GPT, Anthropic Claude, Google Gemini, DeepSeek, Mistral, and any other model reachable through LiteLLM (Azure OpenAI, AWS Bedrock, Vertex AI, Databricks, OpenRouter, Ollama, and more) — see [Changing a model](https://docs.pr-agent.ai/usage-guide/changing_a_model/)
+- **AI Models**: Claude, through Claude Code (`opus`, `sonnet`, `haiku`, `fable` or a pinned model id) — see [Changing a model](docs/docs/usage-guide/changing_a_model.md)
 
 **Open Source Benefits**:
 - Full control over your data and infrastructure
@@ -226,8 +246,8 @@ The following diagram illustrates PR-Agent tools and their flow:
 
 ### Self-hosted PR-Agent
 
-- If you host PR-Agent with your OpenAI API key, it is between you and OpenAI. You can read their API data privacy policy here:
-https://openai.com/enterprise-privacy
+- Self-hosted PR-Agent sends PR content to Anthropic through Claude Code, under the terms of your Claude plan or API
+agreement: https://www.anthropic.com/legal/privacy
 
 ## Contributing
 

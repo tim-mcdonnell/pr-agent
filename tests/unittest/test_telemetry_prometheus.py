@@ -157,7 +157,6 @@ def test_direct_azure_start_ignores_retained_multiprocess_state(tmp_path, order)
     env = {key: value for key, value in os.environ.items() if key in {
         "PATH", "PYTHONPATH", "LANG", "LC_ALL", "TIKTOKEN_CACHE_DIR",
     }}
-    env["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     seed = dedent("""
         import sys
         from pr_agent.telemetry.prometheus_multiproc import ensure_prometheus_multiproc_dir
