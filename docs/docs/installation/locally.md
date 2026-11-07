@@ -96,12 +96,9 @@ docker run --rm -it --env-file .env pragent/pr-agent:latest --pr_url <pr_url> <t
 
 If you encounter an error when running the Docker image, it is almost always due to a misconfiguration of api keys or tokens.
 
-Note that litellm, which is used by pr-agent, sometimes returns non-informative error messages such as `APIError: OpenAIException - Connection error.`
-Carefully check the api keys and tokens you provided and make sure they are correct.
-Adjustments may be needed depending on your llm provider.
-
-For example, for Azure OpenAI, additional keys are [needed](../usage-guide/changing_a_model.md#azure).
-Same goes for other providers, make sure to check the [documentation](../usage-guide/changing_a_model.md#changing-a-model-in-pr-agent)
+Model calls run through Claude Code; see [Claude Code integration](../usage-guide/claude_agent_sdk.md) for the
+credentials it accepts and [Changing a model](../usage-guide/changing_a_model.md#changing-a-model-in-pr-agent) for
+model slugs. Run `pr-agent doctor` to check the setup before a full run.
 
 ## Using pip package
 
