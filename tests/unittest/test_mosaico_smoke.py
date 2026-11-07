@@ -5,7 +5,7 @@ build_app() (REAL RawContextMiddleware mounted), proving the full path:
   HTTP POST / -> RawContextMiddleware -> DefaultRequestHandler -> PRAgentExecutor.execute
   -> request-scoped settings deepcopy -> route_and_run_result -> DiffInputProvider -> render.
 
-The LLM is mocked (LiteLLMAIHandler.chat_completion -> canned review YAML); no real
+The LLM is mocked (ClaudeAgentSDKHandler.chat_completion -> canned review YAML); no real
 LLM/Langfuse/host. A second case drives an empty diff and asserts the empty-fallback
 text comes back with NO exception escaping.
 
@@ -18,7 +18,7 @@ import pytest
 from a2a.types import Message, Part, Role, SendMessageRequest
 from google.protobuf.json_format import MessageToDict
 
-import pr_agent.algo.ai_handlers.litellm_ai_handler as litellm_mod
+from pr_agent.algo.ai_handlers.claude_agent_sdk_handler import ClaudeAgentSDKHandler
 from pr_agent.mosaico.server import build_app
 
 REVIEW_DIFF = """```diff
@@ -100,7 +100,7 @@ class TestSmokeFullPath:
         async def fake_chat_completion(self, model, system, user, temperature=0.2, **kwargs):
             return CANNED_REVIEW_YAML, "stop"
 
-        monkeypatch.setattr(litellm_mod.LiteLLMAIHandler, "chat_completion", fake_chat_completion)
+        monkeypatch.setattr(ClaudeAgentSDKHandler, "chat_completion", fake_chat_completion)
 
         resp = await _post_message(f"review this\n{REVIEW_DIFF}")
         assert resp.status_code == 200, resp.text
@@ -129,7 +129,7 @@ class TestSmokeFullPath:
         async def fake_chat_completion(self, model, system, user, temperature=0.2, **kwargs):
             return CANNED_REVIEW_YAML, "stop"
 
-        monkeypatch.setattr(litellm_mod.LiteLLMAIHandler, "chat_completion", fake_chat_completion)
+        monkeypatch.setattr(ClaudeAgentSDKHandler, "chat_completion", fake_chat_completion)
 
         empty = "```diff\nnot actually a diff\n```"
         resp = await _post_message(f"review\n{empty}")
@@ -158,7 +158,7 @@ class TestSmokeFullPath:
         async def failing_chat_completion(self, model, system, user, temperature=0.2, **kwargs):
             raise RuntimeError("provider unavailable")
 
-        monkeypatch.setattr(litellm_mod.LiteLLMAIHandler, "chat_completion", failing_chat_completion)
+        monkeypatch.setattr(ClaudeAgentSDKHandler, "chat_completion", failing_chat_completion)
 
         resp = await _post_message(f"{verb} this\n{REVIEW_DIFF}")
         assert resp.status_code == 200, resp.text

@@ -3,11 +3,10 @@
 from types import SimpleNamespace
 
 import pytest
-from litellm import token_counter
 
 import pr_agent.tools.pr_line_questions as plq
 from pr_agent.algo.token_budget import MESSAGE_FRAMING_TOKEN_ALLOWANCE, REPLY_FRAMING_TOKEN_ALLOWANCE
-from pr_agent.algo.token_handler import TokenHandler
+from pr_agent.algo.token_handler import TokenHandler, estimate_tokens
 from pr_agent.config_loader import get_settings
 from tests.unittest._settings_helpers import restore_settings, snapshot_settings
 
@@ -46,8 +45,8 @@ class _RecordingAIHandler:
 @pytest.mark.parametrize(
     ("fallback_models", "fail_models", "expected_model"),
     [
-        ([], (), "gpt-4o"),
-        (["gpt-3.5-turbo"], ("gpt-4o",), "gpt-3.5-turbo"),
+        ([], (), "opus"),
+        (["sonnet"], ("opus",), "sonnet"),
     ],
 )
 @pytest.mark.asyncio
@@ -116,12 +115,12 @@ async def test_ask_line_keeps_final_prompt_within_budget_after_loading_history(
     }
 
     try:
-        settings.set("config.model", "gpt-4o")
+        settings.set("config.model", "opus")
         # The assertions compare the exact reply, so keep the optional run-details section out of it.
         settings.set("config.output_run_details", False)
         settings.set("config.model_weak", "")
         settings.set("config.fallback_models", fallback_models)
-        settings.set("config.max_model_tokens", 700)
+        settings.set("config.max_model_tokens", 1200)
         settings.set("config.max_output_tokens", 100)
         settings.set("openai.deployment_id", None)
         settings.set("openai.fallback_deployments", [])
@@ -136,14 +135,13 @@ async def test_ask_line_keeps_final_prompt_within_budget_after_loading_history(
 
         assert len(ai_handler.requests) == 1 + len(fail_models)
         request = next(item for item in ai_handler.requests if item["model"] == expected_model)
-        prompt_tokens = token_counter(
-            model=expected_model,
-            messages=[
-                {"role": "system", "content": request["system"]},
-                {"role": "user", "content": request["user"]},
-            ],
+        prompt_tokens = (
+            estimate_tokens(request["system"])
+            + estimate_tokens(request["user"])
+            + 2 * MESSAGE_FRAMING_TOKEN_ALLOWANCE
+            + REPLY_FRAMING_TOKEN_ALLOWANCE
         )
-        assert prompt_tokens <= 600
+        assert prompt_tokens <= 1100
         assert len(request["user"]) < len("\n".join(comment.body for comment in comments))
         assert "Why is this change needed?" in request["user"]
         assert "+    c = 3" in request["user"]
@@ -154,7 +152,7 @@ async def test_ask_line_keeps_final_prompt_within_budget_after_loading_history(
 
 
 @pytest.mark.asyncio
-async def test_ask_line_uses_attempted_model_for_non_gpt_prompt_budget(monkeypatch):
+async def test_ask_line_uses_attempted_model_for_fallback_prompt_budget(monkeypatch):
     settings = get_settings()
     keys = (
         "config.model",
@@ -190,7 +188,7 @@ async def test_ask_line_uses_attempted_model_for_non_gpt_prompt_budget(monkeypat
         for index in range(200)
     ]
     provider = _FakeGithubProvider(comments, patch)
-    ai_handler = _RecordingAIHandler(("gpt-4o",))
+    ai_handler = _RecordingAIHandler(("opus",))
     question = plq.PR_LineQuestions.__new__(plq.PR_LineQuestions)
     question.question_str = "Why is this change needed?"
     question.git_provider = provider
@@ -216,7 +214,7 @@ async def test_ask_line_uses_attempted_model_for_non_gpt_prompt_budget(monkeypat
         return len(text)
 
     try:
-        settings.set("config.model", "gpt-4o")
+        settings.set("config.model", "opus")
         # The assertions compare the exact reply, so keep the optional run-details section out of it.
         settings.set("config.output_run_details", False)
         settings.set("config.model_weak", "")

@@ -17,7 +17,7 @@ TaskStatusUpdateEvent), then failed().  The first event to the ActiveTask MUST b
 TaskArtifactUpdateEvent (not a TaskStatusUpdateEvent), otherwise the SDK raises
 "Agent should enqueue Task before TaskStatusUpdateEvent event".
 
-health_check issues a single, NON-retry-wrapped litellm probe."""
+health_check issues a single Claude Code probe."""
 import asyncio
 import copy
 from collections import deque
@@ -173,17 +173,9 @@ class PRAgentExecutor(AgentExecutor):
 
 
 async def health_check() -> str:
-    """LLM-connectivity probe for /health. Bypasses pr-agent's retry-wrapped
-    LiteLLMAIHandler.chat_completion and issues a single isolated completion,
-    after applying the MOSAICO LLM settings."""
+    """LLM-connectivity probe for /health: one isolated Claude Code completion with the MOSAICO settings."""
     try:
-        import litellm
-
-        # Construct the handler to snapshot request-local provider credentials and
-        # routing without using its retry-wrapped chat_completion.
-        from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
-
-        handler = LiteLLMAIHandler()
+        from pr_agent.algo.ai_handlers.claude_agent_sdk_handler import ClaudeAgentSDKHandler
 
         model = get_settings().get("CONFIG.MODEL", None)
         if not model:
@@ -191,12 +183,8 @@ async def health_check() -> str:
         timeout = get_settings().get("MOSAICO.HEALTH_TIMEOUT_SECONDS", 10)
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not isfinite(timeout) or timeout <= 0:
             raise ValueError("MOSAICO health timeout must be a finite positive number")
-        # Bound cooperative waits, including request preparation, not just HTTP I/O.
-        # Synchronous handler construction and blocking SDK work cannot be interrupted.
         async with asyncio.timeout(timeout):
-            await handler.probe_completion(
-                model, timeout=timeout, _completion=litellm.acompletion,
-            )
+            await ClaudeAgentSDKHandler().chat_completion(model, "Reply with exactly: ok", "ping")
         return "OK"
     except Exception as e:
         get_logger().warning(f"MOSAICO health_check unhealthy: {type(e).__name__}")

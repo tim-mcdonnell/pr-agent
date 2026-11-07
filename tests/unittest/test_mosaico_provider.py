@@ -404,7 +404,7 @@ def isolated_settings():
 async def _run_tool_via_spy(monkeypatch, isolated_settings, verb, canned_yaml, second_yaml=""):
     """Patch the provider registry to a spy subclass, mock the LLM, run the tool with
     publish_output=False, and return (captured_artifact, incremental_accessed_list)."""
-    import pr_agent.algo.ai_handlers.litellm_ai_handler as litellm_mod
+    import pr_agent.algo.ai_handlers.claude_agent_sdk_handler as handler_mod
     from pr_agent.git_providers import _GIT_PROVIDERS
 
     files = parse_unified_diff(TWO_FILE_DIFF)
@@ -426,7 +426,7 @@ async def _run_tool_via_spy(monkeypatch, isolated_settings, verb, canned_yaml, s
             return canned_yaml, "stop"
         return second_yaml, "stop"
 
-    monkeypatch.setattr(litellm_mod.LiteLLMAIHandler, "chat_completion", fake_chat_completion)
+    monkeypatch.setattr(handler_mod.ClaudeAgentSDKHandler, "chat_completion", fake_chat_completion)
 
     from pr_agent.agent.pr_agent import PRAgent
     ok = await PRAgent().handle_request("mosaico://supplied-diff", ["/" + verb])

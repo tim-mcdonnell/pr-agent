@@ -15,17 +15,12 @@ LONG_DESCRIPTION_ALLOWLIST = {
     ("config", "enable_per_directory_settings"),
     ("config", "per_directory_settings_max_tree_pages"),
     ("config", "extra_config_url"),
-    ("config", "num_retries"),
     ("config", "repo_context_max_glob_matches"),
     ("config", "repo_context_sibling_repos"),
     ("config", "repo_context_max_sibling_files"),
     ("config", "model_token_count_estimate_factor"),
     ("config", "persistent_inline_comments"),
     ("config", "bot_user_indicators"),
-    ("config", "additional_reasoning_effort_models"),
-    ("config", "no_temperature_models"),
-    ("config", "enable_claude_adaptive_thinking"),
-    ("config", "claude_extended_thinking_models_override"),
     ("config", "extract_issue_from_branch"),
     ("config", "branch_issue_regex"),
     ("config", "description_issue_regex"),
@@ -44,12 +39,6 @@ LONG_DESCRIPTION_ALLOWLIST = {
     ("gerrit", "command_timeout_seconds"),
     ("jira", "jira_requirements_field"),
     ("jira", "project_keys"),
-    ("litellm", "custom_llm_provider"),
-    ("litellm", "force_streaming_custom_llm_provider"),
-    ("litellm", "base_models"),
-    ("litellm", "cache_control_injection_points"),
-    ("openrouter", "reasoning_effort"),
-    ("openrouter", "reasoning_max_tokens"),
     ("otel", "otlp_timeout"),
     ("otel", "prometheus_multiproc_dir"),
     ("artifacts", "truncate_from"),
@@ -73,7 +62,7 @@ def _documented_keys(text: str) -> Counter:
 
 def test_config_reference_covers_every_active_key():
     keys = _toml_keys(CONFIG_TOML.read_text(encoding="utf-8"))
-    assert sum(keys.values()) == 307
+    assert sum(keys.values()) == 276
 
     assert {
         "model",
@@ -86,7 +75,7 @@ def test_config_reference_covers_every_active_key():
         "telegram_chat_id",
         "teams_webhook_url",
     } <= set(keys)
-    assert {"force_streaming_custom_llm_provider", "cache_control_injection_points"} <= set(keys)
+    assert {"explore_repo", "explore_commands", "repo_path", "max_turns"} <= set(keys)
 
 
 def test_config_reference_page_lists_every_active_key():
@@ -234,9 +223,6 @@ def test_render_page_rejects_a_section_docs_entry_with_no_section():
             "needs_review (seems acceptable but deserves focused reviewer attention)",
             "changes_required (clear issues to fix before merge)",
         )),
-        ("openrouter", "reasoning_effort", (
-            "For models not covered by PR-Agent's clamps, do not assume",
-        )),
     ],
 )
 def test_generator_preserves_reference_description_details(section_name, key, fragments):
@@ -254,7 +240,6 @@ def test_generator_preserves_reference_description_details(section_name, key, fr
     "section_name,key,page",
     [
         ("config", "repo_context_files", "additional_configurations.md"),
-        ("config", "claude_adaptive_thinking_models_override", "changing_a_model.md"),
         ("model_routing", "enable", "changing_a_model.md"),
         ("model_routing", "rules", "changing_a_model.md"),
         ("skills", "enabled", "agent_skills.md"),

@@ -36,9 +36,8 @@ class RunDetails:
     # Sticky: once a fallback has won, a later success on the primary model must not
     # clear this, or the comment would hide that a fallback ran at all.
     fallback_used: bool = False
-    # Input/output tokens summed over every AI call of the run. Named after litellm's
-    # normalized usage object, which is what the collector reads. Both stay 0 when no usage
-    # reaches the collector, e.g. streaming responses or the langchain handler.
+    # Input/output tokens summed over every AI call of the run, from the usage Claude Code reports
+    # (prompt_tokens includes cache reads and writes). Both stay 0 when no usage reaches the collector.
     prompt_tokens: int = 0
     completion_tokens: int = 0
     # Provider-reported total when available, otherwise derived from prompt + completion.
@@ -46,15 +45,14 @@ class RunDetails:
     # while `model_used` names only the model behind the final answer.
     total_tokens: int = 0
     # Provider-reported prompt-cache activity summed over every AI call of the run.
-    # Named after litellm's normalized usage fields (Anthropic cache_read_input_tokens /
-    # cache_creation_input_tokens; DeepSeek prompt_cache_hit_tokens maps onto read).
+    # Named after Anthropic's usage fields (cache_read_input_tokens / cache_creation_input_tokens).
     # Both stay 0 when the provider does not report cache usage.
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
     # Successful LLM invocations, counted even when their token usage is unavailable.
     num_ai_calls: int = 0
-    # Accumulate costs only when cost output is enabled and LiteLLM can synchronously
-    # price a successful response with a positive amount. Use the known-call count to
+    # Accumulate costs only when cost output is enabled and Claude Code reports a positive
+    # list-price estimate for a successful response. Use the known-call count to
     # distinguish priced calls from missing pricing data. Retain per-model totals to
     # keep fallback and multi-call runs auditable.
     total_cost_usd: Decimal = field(default_factory=lambda: Decimal(0))
@@ -140,12 +138,11 @@ def _read_token_field(usage, name: str) -> int:
 
 
 def _read_cache_token_field(usage, public_name: str, private_name: str) -> int:
-    """Read a cache-token field from a litellm usage object or dict.
+    """Read a cache-token field from a usage object or dict.
 
-    litellm's ``Usage`` keeps these under private attributes (``_cache_read_input_tokens``,
-    ``_cache_creation_input_tokens``), while a raw dict carries the public key.
-    ``prompt_tokens_details.cached_tokens`` is litellm's normalized alias for cache reads, and
-    DeepSeek reports cache hits as ``prompt_cache_hit_tokens``. The details sub-object may be
+    A raw dict carries the public key; objects may keep it under a private attribute
+    (``_cache_read_input_tokens``), ``prompt_tokens_details.cached_tokens`` or
+    ``prompt_cache_hit_tokens``. The details sub-object may be
     None in the raw payload, so the lookup must never assume it is a mapping.
     """
     read_aliases = ("prompt_tokens_details", "prompt_cache_hit_tokens")
@@ -179,7 +176,7 @@ def _read_cache_token_field(usage, public_name: str, private_name: str) -> int:
 
 
 def add_token_usage(usage) -> None:
-    """Accumulate token counts from a litellm usage object or dict."""
+    """Accumulate token counts from a usage object or dict."""
     details = get_run_details()
     if details is None or usage is None:
         return
@@ -202,10 +199,8 @@ def add_token_usage(usage) -> None:
 def _as_decimal_cost(cost_usd) -> Decimal | None:
     """Normalize a positive finite USD value without introducing float math.
 
-    Zero is rejected on purpose: litellm.completion_cost returns 0.0 both for
-    zero-priced model entries (e.g. local/ollama models) and for usage without
-    billable tokens, so a zero here means "could not be priced", not "free" —
-    recording it would render a false "$0.00" with cost status complete.
+    Zero is rejected on purpose: a zero estimate means "could not be priced", not
+    "free" — recording it would render a false "$0.00" with cost status complete.
     """
     if cost_usd is None or isinstance(cost_usd, bool):
         return None

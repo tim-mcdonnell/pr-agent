@@ -1,106 +1,59 @@
-import asyncio
-import contextvars
-import importlib.util
-import os
-import re
-from concurrent.futures import ThreadPoolExecutor
-from math import ceil
+from math import ceil, isfinite
 from threading import Lock
 
 from jinja2 import StrictUndefined
 from jinja2.sandbox import SandboxedEnvironment
-from tiktoken import encoding_for_model, get_encoding
+from tiktoken import get_encoding
 
 from pr_agent.config_loader import get_settings
 from pr_agent.log import get_logger
 
-
-def _use_bundled_tiktoken_files() -> None:
-    """Point tiktoken at LiteLLM's bundled encoding files unless the host chose a cache directory.
-
-    LiteLLM only does this once its encoding module is imported, so tiktoken could otherwise download.
-    """
-    if "TIKTOKEN_CACHE_DIR" in os.environ or "DATA_GYM_CACHE_DIR" in os.environ:
-        return
-    custom_dir = os.environ.get("CUSTOM_TIKTOKEN_CACHE_DIR")
-    if custom_dir:
-        os.environ["TIKTOKEN_CACHE_DIR"] = custom_dir
-        return
-    spec = importlib.util.find_spec("litellm")
-    if spec is None or not spec.submodule_search_locations:
-        return
-    bundled_dir = os.path.join(spec.submodule_search_locations[0], "litellm_core_utils", "tokenizers")
-    if os.path.isdir(bundled_dir):
-        os.environ["TIKTOKEN_CACHE_DIR"] = bundled_dir
+# Claude has no offline tokenizer, so counts are o200k_base tiktoken counts scaled by
+# config.model_token_count_estimate_factor. Claude 5.5 models produced 1.40-1.68x the o200k count
+# on this repository's diffs, docs and prompts (1.62-1.68x on anything over 1k tokens).
+DEFAULT_CLAUDE_TOKEN_FACTOR = 0.7
+_warned_factors: set = set()
 
 
-_use_bundled_tiktoken_files()
-
-
-def _await_coroutine(coro):
-    """Run a coroutine to completion from a synchronous call site.
-
-    ``asyncio.run`` cannot be called from a running event loop, and the accurate
-    token-count path is invoked synchronously from tools that run inside one, so
-    an active loop runs the coroutine on a dedicated worker loop instead. The
-    caller's contextvars are copied into the worker so request-scoped settings
-    (e.g. starlette ``context``) stay visible to the token-count coroutine.
-    """
+def _claude_token_multiplier() -> float:
+    raw_factor = get_settings().get("config.model_token_count_estimate_factor", DEFAULT_CLAUDE_TOKEN_FACTOR)
     try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-    worker_loop = asyncio.new_event_loop()
-    context = contextvars.copy_context()
+        multiplier = 1 + float(raw_factor)
+    except (TypeError, ValueError, OverflowError):
+        multiplier = None
+    if multiplier is None or isinstance(raw_factor, bool) or not isfinite(multiplier) or not multiplier > 0:
+        if repr(raw_factor) not in _warned_factors:
+            _warned_factors.add(repr(raw_factor))
+            get_logger().warning(
+                f"model_token_count_estimate_factor is not a usable number ({raw_factor!r}), "
+                f"using {DEFAULT_CLAUDE_TOKEN_FACTOR}")
+        multiplier = 1 + DEFAULT_CLAUDE_TOKEN_FACTOR
+    return multiplier
+
+
+def estimate_tokens(text: str) -> int:
+    """Estimate the Claude token count of ``text``."""
+    if not text:
+        return 0
+    raw = len(TokenEncoder.get_token_encoder().encode(text, disallowed_special=()))
     try:
-        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="token-count") as executor:
-            return executor.submit(context.run, worker_loop.run_until_complete, coro).result()
-    finally:
-        worker_loop.close()
-
-
-class ModelTypeValidator:
-    @staticmethod
-    def is_openai_model(model_name: str) -> bool:
-        return 'gpt' in model_name or re.match(r"^o[1-9](-mini|-preview)?$", model_name)
+        return ceil(raw * _claude_token_multiplier())
+    except (OverflowError, ValueError):
+        return raw
 
 
 class TokenEncoder:
+    """Process-wide o200k_base tiktoken encoder used for every token estimate."""
+
     _encoder_instance = None
-    _model = None
-    _lock = Lock()  # Create a lock object
+    _lock = Lock()
 
     @classmethod
     def get_token_encoder(cls, model=None):
-        configured_model = get_settings().config.model
-        model = model or configured_model
-
-        # Use a fresh tokenizer for explicit fallback models without replacing
-        # the cached tokenizer for the configured primary model.
-        if model != configured_model:
-            return cls._create_encoder(model)
-
-        # The cached encoder and the model it belongs to must be read and written
-        # as one unit. Checking outside the lock let a concurrent caller see the
-        # new `_model` while `_encoder_instance` still held the previous model's
-        # tokenizer, and it would then get an encoder for the wrong model. Reading
-        # the cache again on return had the same problem in reverse: another
-        # request could swap the cache in between, so the encoder to return is
-        # captured here rather than re-read after the lock is released.
         with cls._lock:
-            if cls._encoder_instance is None or model != cls._model:
-                encoder = cls._create_encoder(model)
-                cls._model = model
-                cls._encoder_instance = encoder
-            encoder = cls._encoder_instance
-        return encoder
-
-    @staticmethod
-    def _create_encoder(model):
-        try:
-            return encoding_for_model(model) if "gpt" in model else get_encoding("o200k_base")
-        except Exception:
-            return get_encoding("o200k_base")
+            if cls._encoder_instance is None:
+                cls._encoder_instance = get_encoding("o200k_base")
+            return cls._encoder_instance
 
 
 class TokenHandler:
@@ -108,16 +61,12 @@ class TokenHandler:
     A class for handling tokens in the context of a pull request.
 
     Attributes:
-    - encoder: An object of the encoding_for_model class from the tiktoken module. Used to encode strings and count the
-      number of tokens in them.
+    - encoder: The o200k_base tiktoken encoder that token estimates are based on.
     - limit: The maximum number of tokens allowed for the given model, as defined in the MAX_TOKENS dictionary in the
       pr_agent.algo module.
     - prompt_tokens: The number of tokens in the system and user strings, as calculated by the _get_system_user_tokens
       method.
     """
-
-    # Constants
-    CLAUDE_MAX_CONTENT_SIZE = 9_000_000 # Maximum allowed content size (9MB) for Claude API
 
     def __init__(self, pr=None, vars: dict | None = None, system="", user="", model=None, *,
                  count_prompt_tokens: bool = True):
@@ -157,7 +106,7 @@ class TokenHandler:
 
         Args:
         - pr: The pull request object.
-        - encoder: An object of the encoding_for_model class from the tiktoken module.
+        - encoder: Unused; kept for callers that pass the handler's encoder.
         - vars: A dictionary of variables.
         - system: The system string.
         - user: The user string.
@@ -169,194 +118,15 @@ class TokenHandler:
             environment = SandboxedEnvironment(undefined=StrictUndefined)
             system_prompt = environment.from_string(system).render(vars)
             user_prompt = environment.from_string(user).render(vars)
-            system_prompt_tokens = len(encoder.encode(system_prompt, disallowed_special=()))
-            user_prompt_tokens = len(encoder.encode(user_prompt, disallowed_special=()))
-            return system_prompt_tokens + user_prompt_tokens
+            return estimate_tokens(system_prompt) + estimate_tokens(user_prompt)
         except Exception as e:
             get_logger().error(f"Error in _get_system_user_tokens: {e}")
             return 0
 
-    def _azure_mode(self) -> bool:
-        """Return whether the configured OpenAI endpoint is Azure OpenAI."""
-        return get_settings().get("OPENAI.API_TYPE", None) == "azure"
-
-    def _provider_from_model(self) -> str | None:
-        """Return the litellm provider key for the configured model, when inferable.
-
-        Mirrors how ``litellm.acount_tokens`` itself resolves the provider from
-        the model string: an explicit ``provider/`` prefix wins, then well-known
-        bare model names. Bare OpenAI models in Azure mode route to ``azure``,
-        matching how ``LiteLLMAIHandler`` routes regular requests. Cloud
-        providers such as bedrock or vertex rely on ambient credentials (set up
-        by PR-Agent for its own requests) and do not need a settings key here.
-        """
-        if "/" in self.model:
-            provider = self.model.split("/", 1)[0].lower()
-            if provider == "openai" and self._azure_mode():
-                return "azure"
-            return provider
-        model_lower = self.model.lower()
-        if "claude" in model_lower:
-            return "anthropic"
-        if ModelTypeValidator.is_openai_model(model_lower):
-            return "azure" if self._azure_mode() else "openai"
-        return None
-
-    def _token_count_api_params(self) -> tuple[str | None, str | None]:
-        """Return the request-local (api_key, api_base) for the configured model.
-
-        Reuses the same provider-to-settings mapping that LiteLLMAIHandler uses for
-        normal requests, so settings-only keys (which litellm cannot see via process
-        environment) reach the provider's token counter.
-        """
-        from pr_agent.algo.ai_handlers.litellm_ai_handler import PROVIDER_SETTING_PATHS
-
-        provider = self._provider_from_model()
-        if provider is None:
-            return None, None
-        settings = get_settings()
-        setting_paths = PROVIDER_SETTING_PATHS.get(provider)
-        api_key = settings.get(setting_paths.get("api_key"), None) if setting_paths else None
-        api_base = settings.get(setting_paths.get("api_base"), None) if setting_paths else None
-        if provider == "openai":
-            api_key = api_key or settings.get("OPENAI.KEY", None)
-            api_base = (
-                api_base
-                or settings.get("OPENAI.API_BASE", None)
-                or os.environ.get("OPENAI_BASE_URL")
-                or os.environ.get("OPENAI_API_BASE")
-            )
-        elif provider == "azure":
-            api_key = settings.get("OPENAI.KEY", None)
-            api_base = (
-                settings.get("OPENAI.API_BASE", None)
-                or os.environ.get("AZURE_API_BASE")
-                or os.environ.get("AZURE_OPENAI_ENDPOINT")
-                or os.environ.get("OPENAI_BASE_URL")
-                or os.environ.get("OPENAI_API_BASE")
-            )
-        return api_key, api_base
-
-    def _routed_count_model(self) -> str:
-        """Return the model string to pass to ``litellm.acount_tokens``.
-
-        Azure counts need the ``azure/`` deployment-style routing that regular
-        requests get from ``LiteLLMAIHandler``, otherwise a bare OpenAI model is
-        counted as plain OpenAI and the deployment/base/version are lost.
-        """
-        if not self._azure_mode():
-            return self.model
-        if self.model.startswith("azure_text/"):
-            return self.model
-        provider = self.model.split("/", 1)[0].lower() if "/" in self.model else None
-        if provider not in (None, "openai", "azure"):
-            return self.model
-        deployment_id = get_settings().get("openai.deployment_id", None)
-        model_name = self.model.split("/", 1)[1] if "/" in self.model else self.model
-        if deployment_id:
-            return f"azure/{deployment_id}"
-        return f"azure/{model_name}"
-
-    async def _acount_tokens(self, patch: str) -> int:
-        """Count tokens through LiteLLM's provider-native counter.
-
-        Uses the configured model (self.model) instead of a hardcoded id, routes
-        to the provider-native counter for Anthropic, Azure/Bedrock/Vertex
-        Claude, Gemini, OpenAI and other keyed providers, and returns 0 when only
-        a local estimate would be produced (tokenizer_type == "local_tokenizer")
-        or on any error; the caller then applies the estimate factor.
-        """
-        if len(patch.encode('utf-8')) > self.CLAUDE_MAX_CONTENT_SIZE:
-            get_logger().warning(
-                "Content too large for provider token counting API, falling back to local estimate"
-            )
-            return 0
-
-        try:
-            import litellm
-
-            api_key, api_base = self._token_count_api_params()
-            response = await asyncio.wait_for(
-                litellm.acount_tokens(
-                    model=self._routed_count_model(),
-                    messages=[{
-                        "role": "user",
-                        "content": patch
-                    }],
-                    system="system",
-                    api_key=api_key,
-                    api_base=api_base,
-                ),
-                timeout=get_settings().get("config.ai_timeout", 120),
-            )
-        except Exception as e:
-            get_logger().error(f"Error in LiteLLM token counting: {e}")
-            return 0
-
-        if getattr(response, "tokenizer_type", "local_tokenizer") == "local_tokenizer":
-            get_logger().debug(
-                f"litellm produced a local token estimate for {self.model}; "
-                "applying model_token_count_estimate_factor"
-            )
-            return 0
-        return response.total_tokens
-
-    def _apply_estimation_factor(self, model_name: str, default_estimate: int) -> int:
-        raw_factor = get_settings().get("config.model_token_count_estimate_factor", 0)
-        try:
-            factor = 1 + float(raw_factor)
-        except (TypeError, ValueError, OverflowError):
-            factor = None
-        if factor is None or isinstance(raw_factor, bool) or not factor > 0:
-            get_logger().warning(
-                f"model_token_count_estimate_factor is not a usable number ({raw_factor!r}), using 1")
-            factor = 1
-        get_logger().warning(f"{model_name}'s token count cannot be accurately estimated. Using factor of {factor}")
-
-        try:
-            return ceil(factor * default_estimate)
-        except (OverflowError, ValueError):
-            get_logger().warning(
-                f"model_token_count_estimate_factor is too large ({raw_factor!r}), using the estimate as is")
-            return default_estimate
-
-    def _get_token_count_by_model_type(self, patch: str, default_estimate: int) -> int:
-        """
-        Get token count based on model type.
-
-        Args:
-            patch: The text to count tokens for.
-            default_estimate: The default token count estimate.
-
-        Returns:
-            int: The calculated token count.
-        """
-        model_name = str(getattr(self, "model", None) or get_settings().config.model).lower()
-
-        accurate_count = _await_coroutine(self._acount_tokens(patch))
-        if accurate_count > 0:
-            return accurate_count
-        if ModelTypeValidator.is_openai_model(model_name) and get_settings().get("OPENAI.KEY"):
-            return default_estimate
-
-        return self._apply_estimation_factor(model_name, default_estimate)
-
     def count_tokens(self, patch: str, force_accurate: bool = False) -> int:
+        """Return the estimated Claude token count of ``patch``.
+
+        ``force_accurate`` is accepted for callers that ask for a careful count near a limit; every
+        estimate already includes the Claude correction factor, so it changes nothing.
         """
-        Counts the number of tokens in a given patch string.
-
-        Args:
-        - patch: The patch string.
-        - force_accurate: If True, uses a more precise calculation method.
-
-        Returns:
-        The number of tokens in the patch string.
-        """
-        encoder_estimate = len(self.encoder.encode(patch, disallowed_special=()))
-
-        # If an estimate is enough (for example, where the maximal allowed tokens is
-        # way below the known limits), return it.
-        if not force_accurate:
-            return encoder_estimate
-
-        return self._get_token_count_by_model_type(patch, encoder_estimate)
+        return estimate_tokens(patch)

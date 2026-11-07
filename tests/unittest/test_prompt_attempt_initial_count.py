@@ -1,3 +1,4 @@
+from math import ceil
 from types import SimpleNamespace
 
 import pr_agent.algo.token_budget as token_budget_module
@@ -5,7 +6,8 @@ import pr_agent.algo.token_handler as token_handler_module
 
 
 def test_for_prompt_attempt_skips_discarded_initial_prompt_count(monkeypatch):
-    settings = SimpleNamespace(config=SimpleNamespace(model="primary-model"))
+    # No configured estimate factor, so estimates use the default Claude factor.
+    settings = SimpleNamespace(config=SimpleNamespace(model="primary-model"), get=lambda key, default=None: default)
     monkeypatch.setattr(token_handler_module, "get_settings", lambda use_context=True: settings)
     monkeypatch.setattr(
         token_handler_module.TokenEncoder,
@@ -48,8 +50,8 @@ def test_for_prompt_attempt_skips_discarded_initial_prompt_count(monkeypatch):
 
     assert calls == []
     assert budget.prompt_tokens == (
-        len("System PR")
-        + len("User ")
+        ceil(len("System PR") * (1 + token_handler_module.DEFAULT_CLAUDE_TOKEN_FACTOR))
+        + ceil(len("User ") * (1 + token_handler_module.DEFAULT_CLAUDE_TOKEN_FACTOR))
         + 2 * token_budget_module.MESSAGE_FRAMING_TOKEN_ALLOWANCE
         + token_budget_module.REPLY_FRAMING_TOKEN_ALLOWANCE
     )

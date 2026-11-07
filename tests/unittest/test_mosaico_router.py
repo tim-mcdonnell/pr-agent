@@ -549,7 +549,7 @@ class TestDefensiveCapture:
     async def test_legacy_callers_unaffected_when_flag_off(self, monkeypatch, restore_settings):
         """Blast-radius guard for CLI/webhook callers, which pass no propagate_tool_errors
         arg: a tool failing internally must still swallow and still return True, unchanged."""
-        import pr_agent.algo.ai_handlers.litellm_ai_handler as litellm_mod
+        import pr_agent.algo.ai_handlers.claude_agent_sdk_handler as handler_mod
         import pr_agent.mosaico.provider_registration  # noqa: F401
         from pr_agent.agent.pr_agent import PRAgent
         from pr_agent.mosaico.diff_provider import parse_unified_diff
@@ -557,7 +557,7 @@ class TestDefensiveCapture:
         async def failing_chat_completion(self, model, system, user, temperature=0.2, **kwargs):
             raise RuntimeError("provider unavailable")
 
-        monkeypatch.setattr(litellm_mod.LiteLLMAIHandler, "chat_completion", failing_chat_completion)
+        monkeypatch.setattr(handler_mod.ClaudeAgentSDKHandler, "chat_completion", failing_chat_completion)
         global_settings.set("MOSAICO.INPUT", {"files": parse_unified_diff(SAMPLE_RAW_DIFF),
                                               "languages": {"py": 1}, "title": "Supplied diff"})
         global_settings.set("CONFIG.GIT_PROVIDER", "mosaico_diff")
@@ -591,7 +591,7 @@ class TestDefensiveCapture:
         """Runs the real arg-parsing path: the flag must be live at the tool run, and gone after.
         Contextless, get_settings() is global_settings, so without the restore one dispatch call
         would leave re-raising on for every later caller."""
-        import pr_agent.algo.ai_handlers.litellm_ai_handler as litellm_mod
+        import pr_agent.algo.ai_handlers.claude_agent_sdk_handler as handler_mod
         import pr_agent.mosaico.provider_registration  # noqa: F401
         from pr_agent.mosaico.diff_provider import parse_unified_diff
 
@@ -601,7 +601,7 @@ class TestDefensiveCapture:
             seen["during"] = get_settings().config.get("propagate_tool_errors")
             raise RuntimeError("provider unavailable")
 
-        monkeypatch.setattr(litellm_mod.LiteLLMAIHandler, "chat_completion", failing_chat_completion)
+        monkeypatch.setattr(handler_mod.ClaudeAgentSDKHandler, "chat_completion", failing_chat_completion)
         global_settings.set("MOSAICO.INPUT", {"files": parse_unified_diff(SAMPLE_RAW_DIFF),
                                               "languages": {"py": 1}, "title": "Supplied diff"})
         global_settings.set("CONFIG.GIT_PROVIDER", "mosaico_diff")

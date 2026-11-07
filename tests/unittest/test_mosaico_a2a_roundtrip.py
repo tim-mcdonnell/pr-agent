@@ -4,7 +4,7 @@ Drives an HTTP POST through the whole server (Starlette + DefaultRequestHandler 
 executor + RawContextMiddleware + route_and_run_result + real PRReviewer with publish_output
 forced False -> A2A 1.0 response). Tier 0b: load-bearing interop proof.
 
-Only the LLM is stubbed (LiteLLMAIHandler.chat_completion -> canned review YAML);
+Only the LLM is stubbed (ClaudeAgentSDKHandler.chat_completion -> canned review YAML);
 everything above it runs real and unmocked.
 
 1.0 WIRE CONTRACT:
@@ -22,7 +22,6 @@ Note: import pr_agent.config_loader first to avoid the pr_agent.log <->
 custom_merge_loader circular import (mirrors server.py)."""
 import asyncio
 import json
-import os
 from contextlib import suppress
 
 import pr_agent.config_loader  # noqa: F401  (import-order load; see module docstring)
@@ -149,11 +148,6 @@ def _build_client(app):
         base_url="http://testserver",
         headers=_A2A_HEADERS,
     )
-
-
-def _live_llm_creds_absent() -> bool:
-    """True when the MOSAICO LLM packaging creds (API_BASE + API_KEY) are NOT both set."""
-    return not (os.getenv("API_BASE") and os.getenv("API_KEY"))
 
 
 class TestA2ARoundTripStubbedLLM:
@@ -463,14 +457,14 @@ class TestA2ARoundTripStubbedLLM:
     @pytest.mark.asyncio
     async def test_warmup_health_and_card(self, monkeypatch):
         """Warm-up: /health and the agent card respond over the same transport."""
-        import litellm
+        import pr_agent.algo.ai_handlers.claude_agent_sdk_handler as handler_mod
 
-        # health_check() issues a direct, non-retry litellm.acompletion probe (NOT
-        # LiteLLMAIHandler.chat_completion), so stub acompletion here to keep /health
-        # healthy offline — no LLM/network in CI.
-        async def fake_acompletion(**kwargs):
-            return {"choices": [{"message": {"content": "ping"}}]}
-        monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+        # health_check() sends one non-retry Claude Code probe through
+        # ClaudeAgentSDKHandler.chat_completion, so stub it to keep /health healthy
+        # offline — no LLM/network in CI.
+        async def fake_chat_completion(self, model, system, user, temperature=0.2, **kwargs):
+            return "ok", "stop"
+        monkeypatch.setattr(handler_mod.ClaudeAgentSDKHandler, "chat_completion", fake_chat_completion)
 
         from pr_agent.mosaico.server import build_app
         app = build_app()
@@ -504,13 +498,13 @@ class TestA2ARoundTripStubbedLLM:
           1. state == TASK_STATE_COMPLETED
           2. artifacts contains our canned-review marker text
         A revert of the add_artifact() call would break assertion 2 (non-vacuity)."""
-        import pr_agent.algo.ai_handlers.litellm_ai_handler as litellm_mod
+        import pr_agent.algo.ai_handlers.claude_agent_sdk_handler as handler_mod
 
         async def fake_chat_completion(self, model, system, user, temperature=0.2, **kwargs):
             return _CANNED_REVIEW_YAML, "stop"
 
         # Stub ONLY the LLM. Everything above it runs real.
-        monkeypatch.setattr(litellm_mod.LiteLLMAIHandler, "chat_completion", fake_chat_completion)
+        monkeypatch.setattr(handler_mod.ClaudeAgentSDKHandler, "chat_completion", fake_chat_completion)
 
         from pr_agent.mosaico.server import build_app
         app = build_app()
@@ -540,12 +534,12 @@ class TestA2ARoundTripStubbedLLM:
 
         Non-vacuity: reverting Fix C (completing instead of failing on ok=False) would
         change this result to TASK_STATE_COMPLETED, flipping this test red."""
-        import pr_agent.algo.ai_handlers.litellm_ai_handler as litellm_mod
+        import pr_agent.algo.ai_handlers.claude_agent_sdk_handler as handler_mod
 
         async def fake_chat_completion(self, model, system, user, temperature=0.2, **kwargs):
             return _CANNED_REVIEW_YAML, "stop"
 
-        monkeypatch.setattr(litellm_mod.LiteLLMAIHandler, "chat_completion", fake_chat_completion)
+        monkeypatch.setattr(handler_mod.ClaudeAgentSDKHandler, "chat_completion", fake_chat_completion)
 
         from pr_agent.mosaico.server import build_app
         app = build_app()
@@ -561,32 +555,6 @@ class TestA2ARoundTripStubbedLLM:
         assert state == "TASK_STATE_FAILED", (
             f"bad URL must yield TASK_STATE_FAILED (Fix C), got: {state}"
         )
-
-
-class TestA2ARoundTripLiveLLM:
-    @pytest.mark.skipif(
-        _live_llm_creds_absent(),
-        reason="live LLM creds (API_BASE + API_KEY) absent; deterministic stubbed test covers the wiring",
-    )
-    @pytest.mark.asyncio
-    async def test_supplied_diff_review_roundtrip_live(self):
-        """Same round-trip but against the REAL configured LLM (no stub). Auto-skips when
-        the MOSAICO packaging creds are absent. Asserts only that real, non-empty,
-        non-error content comes back — content is model-dependent so no marker check."""
-        from pr_agent.mosaico.server import build_app
-        app = build_app()
-        async with _build_client(app) as client:
-            resp = await client.post("/", json=_message_send_body(_DIFF_TEXT))
-
-        assert resp.status_code == 200
-        payload = resp.json()
-        assert "result" in payload, f"no result in response: {payload}"
-        state = _get_task_state(payload["result"])
-        assert state == "TASK_STATE_COMPLETED", f"live test expected completed: {payload['result']}"
-        text = _extract_artifact_text(payload["result"])
-        assert text, "live agent returned empty artifacts"
-        assert "(no output produced)" not in text
-        assert not text.startswith("Error:")
 
 
 @pytest.fixture

@@ -3,12 +3,12 @@ import pytest
 
 from pr_agent.algo.skills_loader import Skill, format_skills_context
 from pr_agent.algo.token_budget import clip_tokens
-from pr_agent.algo.token_handler import TokenEncoder
+from pr_agent.algo.token_handler import estimate_tokens
 from pr_agent.log import get_logger
 
 
 def _tokens(text):
-    return len(TokenEncoder.get_token_encoder().encode(text))
+    return estimate_tokens(text)
 
 
 BIG = Skill(name="s", description="d", body="word " * 5000)
@@ -28,7 +28,8 @@ def test_tiny_budget_stays_within_budget_even_when_marker_does_not_fit():
     assert out == ""
 
 
-@pytest.mark.parametrize("budget", [20, 50, 200, 1000])
+# The skill header and truncation marker alone estimate to about 28 Claude tokens.
+@pytest.mark.parametrize("budget", [35, 50, 200, 1000])
 def test_the_truncated_context_still_carries_the_skill(budget):
     """Keep the skill and its truncation marker, so shrinking cannot degenerate to nothing."""
     out = format_skills_context([BIG], budget)

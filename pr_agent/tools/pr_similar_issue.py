@@ -4,7 +4,6 @@ import uuid
 from enum import StrEnum
 from itertools import batched, islice
 
-import openai
 import tiktoken
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -12,6 +11,11 @@ from pr_agent.algo import MAX_TOKENS
 from pr_agent.config_loader import get_settings
 from pr_agent.git_providers import get_git_provider
 from pr_agent.log import get_logger
+
+try:
+    import openai
+except ImportError:  # optional: install the similar-issue dependency group for issue embeddings
+    openai = None
 
 MODEL = "text-embedding-ada-002"
 PINECONE_UPSERT_READY_TIMEOUT_SECONDS = 30
@@ -39,6 +43,8 @@ def _fits_embedding_input(text: str) -> bool:
 
 def _get_embedding_client(api_key: str):
     """Return the openai client for this key, reusing its connection pool."""
+    if openai is None:
+        raise RuntimeError("/similar_issue needs the openai package: uv sync --group similar-issue")
     if api_key not in _EMBEDDING_CLIENTS:
         _EMBEDDING_CLIENTS[api_key] = openai.OpenAI(api_key=api_key)
     return _EMBEDDING_CLIENTS[api_key]

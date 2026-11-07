@@ -14,7 +14,7 @@ from pr_agent.algo.run_details import (
 
 
 class _Usage:
-    """Stand-in for litellm's usage object (attribute access)."""
+    """Stand-in for a provider usage object read by attribute access."""
 
     def __init__(self, prompt_tokens, completion_tokens, total_tokens):
         self.prompt_tokens = prompt_tokens
@@ -229,7 +229,7 @@ def test_record_ai_call_aggregates_decimal_costs_by_model():
 
 
 def test_record_ai_call_treats_zero_cost_as_unpriced():
-    """litellm.completion_cost returns 0.0 for unpriced models and empty usage;
+    """A zero cost is what an unpriced model or empty usage reports;
     recording it would render a false '$0.00' with cost status complete."""
     init_run_details()
 

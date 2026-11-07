@@ -52,8 +52,7 @@ def parse_observability_metadata(raw) -> dict:
 def mosaico_log_context(meta, context_id):
     """Bind the MOSAICO correlation IDs into loguru for the duration of the block.
 
-    Log correlation only - does not feed the litellm Langfuse callback (which traces
-    independently from env). ``meta={}`` is a clean pass-through."""
+    Log correlation only. ``meta={}`` is a clean pass-through."""
     bindings = {}
     if meta:
         for k in _KEYS:

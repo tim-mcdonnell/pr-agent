@@ -51,21 +51,6 @@ _ALLOWLIST = {
         "output_relevant_configurations",
     ): "get_settings().get('config', {}).get('output_relevant_configurations', False) in "
     "pr_agent/tools/pr_description.py",
-    (
-        "config",
-        "enable_claude_extended_thinking",
-    ): "settings.config.get(key, default) in the thinking-controls loop in "
-    "pr_agent/algo/ai_handlers/litellm_ai_handler.py",
-    (
-        "config",
-        "extended_thinking_budget_tokens",
-    ): "settings.config.get(key, default) in the thinking-controls loop in "
-    "pr_agent/algo/ai_handlers/litellm_ai_handler.py",
-    (
-        "config",
-        "extended_thinking_max_output_tokens",
-    ): "settings.config.get(key, default) in the thinking-controls loop in "
-    "pr_agent/algo/ai_handlers/litellm_ai_handler.py",
     # [bitbucket_app] commands_conf is passed in as "push_commands" and read with get_settings().get(commands_conf)
     (
         "bitbucket_app",
@@ -94,31 +79,6 @@ _ALLOWLIST = {
         "github",
         "seconds_between_writes",
     ): "github_config.get('seconds_between_writes') in pr_agent/git_providers/github_provider.py",
-    # [openrouter] read as openrouter_settings = settings.get("openrouter", {}) or {}
-    (
-        "openrouter",
-        "provider_only",
-    ): "openrouter_settings.get('provider_only', []) in pr_agent/algo/ai_handlers/litellm_ai_handler.py",
-    (
-        "openrouter",
-        "provider_order",
-    ): "openrouter_settings.get('provider_order', []) in pr_agent/algo/ai_handlers/litellm_ai_handler.py",
-    (
-        "openrouter",
-        "allow_fallbacks",
-    ): "openrouter_settings.get('allow_fallbacks', True) in pr_agent/algo/ai_handlers/litellm_ai_handler.py",
-    (
-        "openrouter",
-        "reasoning_effort",
-    ): "openrouter_settings.get('reasoning_effort', '') in pr_agent/algo/ai_handlers/litellm_ai_handler.py",
-    (
-        "openrouter",
-        "reasoning_max_tokens",
-    ): "openrouter_settings.get('reasoning_max_tokens', 0) in pr_agent/algo/ai_handlers/litellm_ai_handler.py",
-    (
-        "openrouter",
-        "max_tokens",
-    ): "openrouter_settings.get('max_tokens', 0) in pr_agent/algo/ai_handlers/litellm_ai_handler.py",
     (
         "pr_description",
         "pr_diagram_direction",

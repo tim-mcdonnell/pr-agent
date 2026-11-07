@@ -11,11 +11,6 @@ import aiohttp
 from starlette_context import request_cycle_context
 
 from pr_agent.agent.pr_agent import PRAgent
-from pr_agent.algo.ai_handlers.litellm_helpers import (
-    DEFAULT_CALLBACK_TIMEOUT_SECONDS,
-    drain_litellm_callbacks,
-    litellm_callbacks_registered,
-)
 from pr_agent.config_loader import get_settings, global_settings
 from pr_agent.git_providers import get_git_provider, get_git_provider_with_context
 from pr_agent.log import LoggingFormat, get_logger, setup_logger
@@ -219,20 +214,8 @@ async def async_handle_request(pr_url, rest_of_comment, comment_id):
     )
 
 async def _handle_request_and_drain(pr_url, rest_of_comment, comment_id):
-    """
-    Run the request, then flush litellm's deferred callbacks before the loop closes.
-
-    This runs in a short-lived child process, so asyncio.run() below tears the loop
-    down and the process exits immediately afterwards - without the drain the last
-    completion's callback is dropped.
-    """
-    try:
-        return await async_handle_request(pr_url, rest_of_comment, comment_id)
-    finally:
-        if litellm_callbacks_registered():
-            await drain_litellm_callbacks(
-                get_settings().litellm.get("callback_timeout_seconds", DEFAULT_CALLBACK_TIMEOUT_SECONDS)
-            )
+    """Run the request in this short-lived child process's event loop."""
+    return await async_handle_request(pr_url, rest_of_comment, comment_id)
 
 
 def run_handle_request(pr_url, rest_of_comment, comment_id):

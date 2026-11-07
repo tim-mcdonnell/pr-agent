@@ -180,7 +180,7 @@ def _wire_reviewer(monkeypatch, provider):
         return None
 
     async def direct_model(f, model_type=None, git_provider=None):
-        return await f("gpt-4o")
+        return await f("opus")
 
     monkeypatch.setattr("pr_agent.tools.pr_reviewer.extract_and_cache_pr_tickets", no_tickets)
     monkeypatch.setattr("pr_agent.tools.pr_reviewer.get_pr_diff", lambda *args, **kwargs: (DIFF, []))

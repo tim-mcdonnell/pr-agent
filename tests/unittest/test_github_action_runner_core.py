@@ -690,7 +690,6 @@ def test_invalid_configured_command_fails_action_but_continues(
 ):
     handled = []
     _patch_synchronize_deps(monkeypatch, handled, [command, "/review"])
-    monkeypatch.setattr(github_action_runner, "litellm_callbacks_registered", lambda: False)
     monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(_write_synchronize_event(tmp_path)))
     monkeypatch.setenv("GITHUB_TOKEN", "token")
@@ -713,7 +712,6 @@ def test_action_exits_nonzero_when_command_fails_and_continues(
             return body != ["/review"]
 
     monkeypatch.setattr(github_action_runner, "PRAgent", FakeAgent)
-    monkeypatch.setattr(github_action_runner, "litellm_callbacks_registered", lambda: False)
     monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(_write_synchronize_event(tmp_path)))
     monkeypatch.setenv("GITHUB_TOKEN", "token")
@@ -766,10 +764,9 @@ async def test_auto_actions_apply_policy_after_repo_settings_without_rebuilding_
     monkeypatch.setenv("AUTO_CAST_FOR_DYNACONF", "false")
     monkeypatch.setattr(config_loader, "global_settings", settings)
     monkeypatch.setattr(github_action_runner, "enforce_request_policy", enforce_request_policy)
-    monkeypatch.setattr(github_action_runner, "litellm_callbacks_registered", lambda: False)
     monkeypatch.setattr(
         github_action_runner, "missing_provider_key_env_vars",
-        lambda: ("openai", ("OPENAI_KEY",)) if missing_model_key else None,
+        lambda: ("claude", ("CLAUDE_CODE_OAUTH_TOKEN",)) if missing_model_key else None,
     )
     settings.set("config.git_provider", "github")
     settings.set("config.ignore_pr_title", ["^\\[Auto\\]", "^Auto"])
@@ -798,7 +795,7 @@ async def test_auto_actions_apply_policy_after_repo_settings_without_rebuilding_
 
     # Verify that ignored batches succeed without a model key, while allowed ones still require it.
     if missing_model_key and allowed:
-        with pytest.raises(SystemExit, match="no usable API key"):
+        with pytest.raises(SystemExit, match="no Claude credential"):
             await github_action_runner._run_action_and_drain()
     else:
         await github_action_runner._run_action_and_drain()
@@ -882,7 +879,6 @@ def _install_fake_auto_tools(monkeypatch):
 
 def test_recorded_auto_tool_failure_fails_action_with_default_gate(monkeypatch, tmp_path, restore_github_settings):
     monkeypatch.setattr(github_action_runner, "apply_repo_settings", lambda pr_url: None)
-    monkeypatch.setattr(github_action_runner, "litellm_callbacks_registered", lambda: False)
     _install_fake_auto_tools(monkeypatch)
 
     class FailingTool(_FakeReviewer):
@@ -904,7 +900,6 @@ def test_recorded_auto_tool_failure_fails_action_with_default_gate(monkeypatch, 
 
 def test_recorded_tool_failure_stays_green_when_gate_disabled(monkeypatch, tmp_path, restore_github_settings):
     monkeypatch.setattr(github_action_runner, "apply_repo_settings", lambda pr_url: None)
-    monkeypatch.setattr(github_action_runner, "litellm_callbacks_registered", lambda: False)
     _install_fake_auto_tools(monkeypatch)
 
     class FailingTool(_FakeReviewer):
@@ -935,7 +930,6 @@ def test_fresh_collector_per_command_and_sticky_status_when_gate_on(monkeypatch,
 
     _patch_synchronize_deps(monkeypatch, handled, ["/review", "/improve"])
     monkeypatch.setattr(github_action_runner, "PRAgent", FakeAgent)
-    monkeypatch.setattr(github_action_runner, "litellm_callbacks_registered", lambda: False)
     _install_action_env(monkeypatch, tmp_path, _write_synchronize_event(tmp_path))
     captured = _capture_action_status(monkeypatch)
 
@@ -966,7 +960,6 @@ def test_fresh_collector_per_command_when_gate_off(monkeypatch, tmp_path, restor
 
     _patch_synchronize_deps(monkeypatch, handled, ["/review", "/improve"])
     monkeypatch.setattr(github_action_runner, "PRAgent", FakeAgent)
-    monkeypatch.setattr(github_action_runner, "litellm_callbacks_registered", lambda: False)
     settings = get_settings()
     settings.set("GITHUB_ACTION_CONFIG.FAIL_ON_TOOL_ERRORS", "false")
     _install_action_env(monkeypatch, tmp_path, _write_synchronize_event(tmp_path))
@@ -991,7 +984,6 @@ def test_recorded_command_failure_fails_action_with_default_gate(monkeypatch, tm
             return None
 
     monkeypatch.setattr(github_action_runner, "PRAgent", FailingAgent)
-    monkeypatch.setattr(github_action_runner, "litellm_callbacks_registered", lambda: False)
     _install_action_env(
         monkeypatch, tmp_path, _write_issue_comment_event(tmp_path, "User"), event_name="issue_comment"
     )
@@ -1026,7 +1018,6 @@ def test_comment_argument_cannot_disable_recorded_failure_check(monkeypatch, tmp
     monkeypatch.setattr(github_action_runner, "get_git_provider_with_context", FakeProvider)
     monkeypatch.setattr(pr_agent_module, "flush_telemetry", lambda: None)
     monkeypatch.setitem(pr_agent_module.command2class, "review", FailingReviewer)
-    monkeypatch.setattr(github_action_runner, "litellm_callbacks_registered", lambda: False)
     event_path = _write_issue_comment_event_with_body(
         tmp_path, "/review --github_action_config.fail_on_tool_errors=false"
     )
@@ -1050,7 +1041,6 @@ def test_command_returning_false_fails_action_even_with_gate_off(monkeypatch, tm
             return body != ["/review"]
 
     monkeypatch.setattr(github_action_runner, "PRAgent", FakeAgent)
-    monkeypatch.setattr(github_action_runner, "litellm_callbacks_registered", lambda: False)
     settings = get_settings()
     settings.set("GITHUB_ACTION_CONFIG.FAIL_ON_TOOL_ERRORS", "false")
     _install_action_env(monkeypatch, tmp_path, _write_synchronize_event(tmp_path))
@@ -1067,7 +1057,6 @@ def test_command_returning_false_fails_action_even_with_gate_off(monkeypatch, tm
 
 def test_auto_tool_returning_false_fails_action_even_with_gate_off(monkeypatch, tmp_path, restore_github_settings):
     monkeypatch.setattr(github_action_runner, "apply_repo_settings", lambda pr_url: None)
-    monkeypatch.setattr(github_action_runner, "litellm_callbacks_registered", lambda: False)
     _install_fake_auto_tools(monkeypatch)
 
     class FalseTool(_FakeReviewer):
@@ -1088,7 +1077,6 @@ def test_auto_tool_returning_false_fails_action_even_with_gate_off(monkeypatch, 
 
 def test_successful_auto_tool_run_stays_green(monkeypatch, tmp_path, restore_github_settings):
     monkeypatch.setattr(github_action_runner, "apply_repo_settings", lambda pr_url: None)
-    monkeypatch.setattr(github_action_runner, "litellm_callbacks_registered", lambda: False)
     _install_fake_auto_tools(monkeypatch)
     _install_action_env(monkeypatch, tmp_path, _write_pull_request_opened_event(tmp_path))
     _patch_env_settings(monkeypatch)
@@ -1104,7 +1092,6 @@ def test_successful_auto_tool_run_stays_green(monkeypatch, tmp_path, restore_git
 def test_successful_dispatched_command_stays_green(monkeypatch, tmp_path, restore_github_settings):
     handled = []
     _patch_issue_comment_deps(monkeypatch, handled)
-    monkeypatch.setattr(github_action_runner, "litellm_callbacks_registered", lambda: False)
     _install_action_env(
         monkeypatch, tmp_path, _write_issue_comment_event(tmp_path, "User"), event_name="issue_comment"
     )
@@ -1197,7 +1184,6 @@ def test_skipped_unconfigured_review_state_stays_green(monkeypatch, tmp_path, re
             handled.append((url, body))
 
     monkeypatch.setattr(github_action_runner, "PRAgent", FakeAgent)
-    monkeypatch.setattr(github_action_runner, "litellm_callbacks_registered", lambda: False)
     _install_action_env(
         monkeypatch, tmp_path, _write_review_event(tmp_path, "approved"), event_name="pull_request_review"
     )
@@ -1624,7 +1610,6 @@ def test_missing_github_token_fails_before_repository_access(
         monkeypatch.setenv("GITHUB_TOKEN", github_token)
     apply_settings = Mock()
     monkeypatch.setattr(github_action_runner, "apply_repo_settings", apply_settings)
-    monkeypatch.setattr(github_action_runner, "litellm_callbacks_registered", lambda: False)
 
     with pytest.raises(SystemExit, match="GITHUB_TOKEN not set.*workflow's env"):
         github_action_runner.main()
@@ -1879,7 +1864,6 @@ def _use_scope_probe_provider(monkeypatch):
 
 def _stub_auto_tools(monkeypatch, tmp_path):
     """Set up an opened-PR run whose three tools record what the shared probe provider showed them."""
-    monkeypatch.setattr(github_action_runner, "litellm_callbacks_registered", lambda: False)
     _install_action_env(monkeypatch, tmp_path, _write_pull_request_opened_event(tmp_path))
     _patch_env_settings(monkeypatch, {
         "GITHUB_ACTION.AUTO_DESCRIBE": True, "GITHUB_ACTION.AUTO_REVIEW": True, "GITHUB_ACTION.AUTO_IMPROVE": True,
@@ -1907,7 +1891,6 @@ def _stub_push_commands(monkeypatch, tmp_path):
     """Set up a synchronize run of three push commands that record what the shared probe provider showed them."""
     handled = []
     _patch_synchronize_deps(monkeypatch, handled, ["/describe", "/review", "/improve"])
-    monkeypatch.setattr(github_action_runner, "litellm_callbacks_registered", lambda: False)
     monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(_write_synchronize_event(tmp_path)))
     monkeypatch.setenv("GITHUB_TOKEN", "token")
@@ -1977,7 +1960,6 @@ def test_push_commands_skip_a_command_whose_pull_request_cannot_be_read(
 async def test_comment_command_builds_one_provider_for_settings_reaction_and_command(
     monkeypatch, tmp_path, restore_github_settings
 ):
-    monkeypatch.setattr(github_action_runner, "litellm_callbacks_registered", lambda: False)
     event_path = tmp_path / "event.json"
     event_path.write_text(json.dumps({
         "action": "created",
@@ -2028,29 +2010,28 @@ def test_repo_settings_load_from_the_url_the_tools_use(event_name, payload, expe
 
 
 @pytest.mark.asyncio
-async def test_callback_drain_reads_the_settings_the_run_applied(monkeypatch):
-    # Repository settings are applied to the run's settings; the teardown must read the same ones.
+async def test_run_settings_stay_in_the_run_scope(monkeypatch):
+    # Repository settings are applied to the run's settings copy, not to the process-wide settings.
     get_settings().get("config")  # Initialize Dynaconf before copying its loaded sections.
     settings = copy.deepcopy(get_settings())
     monkeypatch.setattr(config_loader, "global_settings", settings)
-    drain = AsyncMock()
-    monkeypatch.setattr(github_action_runner, "litellm_callbacks_registered", lambda: True)
-    monkeypatch.setattr(github_action_runner, "drain_litellm_callbacks", drain)
+    seen = []
 
     async def run_action():
-        get_settings().set("litellm.callback_timeout_seconds", 7)
+        get_settings().set("claude_code.max_turns", 7)
+        seen.append(get_settings() is not settings and get_settings().claude_code.get("max_turns"))
 
     monkeypatch.setattr(github_action_runner, "run_action", run_action)
 
     await github_action_runner._run_action_and_drain()
 
-    drain.assert_awaited_once_with(7)
-    assert settings.litellm.get("callback_timeout_seconds") != 7
+    assert seen == [7]
+    assert settings.claude_code.get("max_turns") != 7
 
 
 @pytest.mark.asyncio
 async def test_trusted_host_settings_reach_the_settings_the_run_is_copied_from(monkeypatch):
-    # The options LiteLLM reads from the process-wide settings must still see the trusted host layer,
+    # Code reading the process-wide settings must still see the trusted host layer,
     # and the run's own apply_repo_settings() must reuse the payload instead of fetching it again.
     get_settings().get("config")  # Initialize Dynaconf before copying its loaded sections.
     settings = copy.deepcopy(get_settings())
@@ -2062,22 +2043,21 @@ async def test_trusted_host_settings_reach_the_settings_the_run_is_copied_from(m
 
     def urlopen(request, timeout):
         fetches.append(request.full_url)
-        return io.BytesIO(b'[litellm]\nsuccess_callback = ["langsmith"]\n')
+        return io.BytesIO(b'[claude_code]\nmax_turns = 7\n')
 
     monkeypatch.setattr(git_utils, "urlopen", urlopen)
-    monkeypatch.setattr(github_action_runner, "litellm_callbacks_registered", lambda: False)
     seen = []
 
     async def run_action():
         git_utils.apply_host_settings()  # apply_repo_settings() applies the host layer first
-        seen.append(get_settings().litellm.get("success_callback"))
+        seen.append(get_settings().claude_code.get("max_turns"))
 
     monkeypatch.setattr(github_action_runner, "run_action", run_action)
 
     await github_action_runner._run_action_and_drain()
 
-    assert seen == [["langsmith"]]
-    assert settings.litellm.get("success_callback") == ["langsmith"]
+    assert seen == [7]
+    assert settings.claude_code.get("max_turns") == 7
     assert fetches == [host_url]
 
 
@@ -2088,7 +2068,6 @@ async def test_unusable_host_settings_do_not_abort_the_run(monkeypatch):
     monkeypatch.setattr(config_loader, "global_settings", settings)
     monkeypatch.setenv("AUTO_CAST_FOR_DYNACONF", "false")  # apply_host_settings sets it; restore it afterwards
     settings.set("config.extra_config_url", "http://[invalid")  # urlparse() raises a ValueError for it
-    monkeypatch.setattr(github_action_runner, "litellm_callbacks_registered", lambda: False)
     ran = []
 
     async def run_action():
@@ -2103,7 +2082,6 @@ async def test_unusable_host_settings_do_not_abort_the_run(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_failed_run_resets_the_request_scope(monkeypatch):
-    monkeypatch.setattr(github_action_runner, "litellm_callbacks_registered", lambda: False)
 
     async def run_action():
         raise RuntimeError("boom")

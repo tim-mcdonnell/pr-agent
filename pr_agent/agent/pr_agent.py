@@ -11,7 +11,7 @@ from starlette_context import context, request_cycle_context
 
 from pr_agent.agent.request_policy import RequestOutcome, enforce_request_policy
 from pr_agent.algo.ai_handlers.base_ai_handler import BaseAiHandler
-from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
+from pr_agent.algo.ai_handlers.claude_agent_sdk_handler import ClaudeAgentSDKHandler, current_command
 from pr_agent.algo.cli_args import CliArgs
 from pr_agent.algo.comment_identity import (
     add_comment_identity,
@@ -377,7 +377,7 @@ def response_language_instructions():
 
 
 class PRAgent:
-    def __init__(self, ai_handler: partial[BaseAiHandler,] = LiteLLMAIHandler):
+    def __init__(self, ai_handler: partial[BaseAiHandler,] = ClaudeAgentSDKHandler):
         self.ai_handler = ai_handler  # handler factory passed to each tool when it is instantiated
 
     async def _handle_request(
@@ -504,6 +504,7 @@ class PRAgent:
                 settings.set("CONFIG.RESPONSE_LANGUAGE", previous_response_language)
             raise
 
+        command_token = current_command.set(action)
         try:
             with response_language_instructions(), get_logger().contextualize(command=action, pr_url=pr_url):
                 get_logger().info("PR-Agent request handler started", analytics=True)
@@ -530,6 +531,7 @@ class PRAgent:
                     span.set_status(StatusCode.OK)
                 return True
         finally:
+            current_command.reset(command_token)
             if language_overridden:
                 settings.set("CONFIG.RESPONSE_LANGUAGE", previous_response_language)
             _record_token_metrics(action, _git_provider)

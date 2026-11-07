@@ -1,12 +1,4 @@
-import os
-import sys
-
 import pytest
-
-# Match CI (#3475): use the LiteLLM cost map bundled with the version pinned in uv.lock rather than the copy
-# LiteLLM fetches at import time, so local runs do not fail on third-party map changes (#3473, #3583).
-# Respect an explicit LITELLM_LOCAL_MODEL_COST_MAP from the environment; set it to False to use the live map.
-os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 
 @pytest.fixture(autouse=True)
@@ -24,15 +16,11 @@ def isolate_run_details():
 
 
 @pytest.fixture(autouse=True)
-def skip_llm_retry_waits(monkeypatch):
-    """Keep chat_completion's same-model retry attempts, without the waits between them.
+def block_real_claude_code(monkeypatch):
+    """Fail any unit test that would launch the Claude Code binary instead of stubbing claude_agent_sdk.query."""
+    import claude_agent_sdk
 
-    Applies once the LiteLLM handler module is imported, which test modules do at collection.
-    """
-    handler_module = sys.modules.get("pr_agent.algo.ai_handlers.litellm_ai_handler")
-    if handler_module is not None:
+    def refuse(*args, **kwargs):
+        raise AssertionError("unit tests must not launch Claude Code; patch claude_agent_sdk.query")
 
-        async def no_sleep(seconds):
-            pass
-
-        monkeypatch.setattr(handler_module.LiteLLMAIHandler._chat_completion_with_retry.retry, "sleep", no_sleep)
+    monkeypatch.setattr(claude_agent_sdk, "query", refuse)

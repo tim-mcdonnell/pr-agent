@@ -281,7 +281,7 @@ class TestGetSkillsContext:
             ["/other/skills"],
         ]
 
-    @pytest.mark.parametrize("models", [("gpt-4", "gpt-4o"), ("gpt-4o", "gpt-4")])
+    @pytest.mark.parametrize("models", [("opus", "sonnet"), ("sonnet", "opus")])
     def test_request_cache_respects_model_changes(self, tmp_path, models):
         from pr_agent.config_loader import get_settings
 
@@ -302,7 +302,8 @@ class TestGetSkillsContext:
                     assert discovery.call_count == call_count
                     rendered.append(actual)
 
-        assert rendered[0] != rendered[1]
+        # Every model shares one token estimate, so only the cache key changes with the model.
+        assert rendered[0] == rendered[1]
 
     def test_request_cache_respects_expanded_path_changes(self, tmp_path, monkeypatch):
         first_dir = tmp_path / "first"

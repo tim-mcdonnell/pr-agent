@@ -38,7 +38,6 @@ def test_process_comment_sync_scopes_settings_per_comment():
 
     with (
         patch.object(github_polling, "async_handle_request", side_effect=fake_async_handle_request),
-        patch.object(github_polling, "litellm_callbacks_registered", return_value=False),
     ):
         github_polling.process_comment_sync("https://example/pr/1", "/review", 123)
 
@@ -62,7 +61,6 @@ def test_consecutive_comments_do_not_share_state():
 
     with (
         patch.object(github_polling, "async_handle_request", side_effect=fake_async_handle_request),
-        patch.object(github_polling, "litellm_callbacks_registered", return_value=False),
     ):
         github_polling.process_comment_sync("https://example/pr/1", "/review", 1)
         github_polling.process_comment_sync("https://example/pr/2", "/review", 2)
@@ -80,7 +78,6 @@ def test_failed_comment_does_not_pin_settings_on_the_calling_context():
 
     with (
         patch.object(github_polling, "async_handle_request", side_effect=ValueError("bad PR url")),
-        patch.object(github_polling, "litellm_callbacks_registered", return_value=False),
     ):
         github_polling.process_comment_sync("https://example/pr/3", "/review", 789)
 
@@ -113,7 +110,6 @@ def test_sync_polling_gets_provider_only_when_notifying():
         patch.object(github_polling, "get_git_provider", side_effect=AssertionError("eager provider")),
         patch.object(github_polling, "get_git_provider_with_context", return_value=provider) as getter,
         patch.object(github_polling, "PRAgent", return_value=agent),
-        patch.object(github_polling, "litellm_callbacks_registered", return_value=False),
     ):
         github_polling.process_comment_sync("https://example/pr/6", "/review", 6)
 

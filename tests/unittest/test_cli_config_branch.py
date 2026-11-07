@@ -15,7 +15,6 @@ def test_run_sets_config_branch_from_cli_flag():
     observed_calls = []
     fake_settings = SimpleNamespace(
         config={},
-        litellm={},
         set=MagicMock(),
     )
 
@@ -26,8 +25,6 @@ def test_run_sets_config_branch_from_cli_flag():
     with patch("pr_agent.cli.get_settings", return_value=fake_settings), patch(
         "pr_agent.cli.PRAgent",
         return_value=SimpleNamespace(handle_request=fake_handle_request),
-    ), patch(
-        "pr_agent.cli.litellm_callbacks_registered", return_value=False,
     ), patch(
         "pr_agent.cli.inject_artifact_context", return_value=None,
     ):
@@ -40,7 +37,6 @@ def test_run_sets_config_branch_from_env_var():
     observed_calls = []
     fake_settings = SimpleNamespace(
         config={},
-        litellm={},
         set=MagicMock(),
     )
 
@@ -54,8 +50,6 @@ def test_run_sets_config_branch_from_env_var():
     ), patch(
         "pr_agent.cli.PRAgent",
         return_value=SimpleNamespace(handle_request=fake_handle_request),
-    ), patch(
-        "pr_agent.cli.litellm_callbacks_registered", return_value=False,
     ), patch(
         "pr_agent.cli.inject_artifact_context", return_value=None,
     ):
@@ -69,7 +63,6 @@ def test_run_whitespace_cli_branch_falls_back_to_env_var():
     observed_calls = []
     fake_settings = SimpleNamespace(
         config={},
-        litellm={},
         set=MagicMock(),
     )
 
@@ -84,8 +77,6 @@ def test_run_whitespace_cli_branch_falls_back_to_env_var():
         "pr_agent.cli.PRAgent",
         return_value=SimpleNamespace(handle_request=fake_handle_request),
     ), patch(
-        "pr_agent.cli.litellm_callbacks_registered", return_value=False,
-    ), patch(
         "pr_agent.cli.inject_artifact_context", return_value=None,
     ):
         cli.run(inargs=["--pr_url=https://github.com/a/b/pull/1", "--config-branch", "   ", "review"])
@@ -98,7 +89,6 @@ def test_run_reconciles_config_branch_when_absent():
     observed_calls = []
     fake_settings = SimpleNamespace(
         config={},
-        litellm={},
         set=MagicMock(),
     )
 
@@ -112,8 +102,6 @@ def test_run_reconciles_config_branch_when_absent():
     ), patch(
         "pr_agent.cli.PRAgent",
         return_value=SimpleNamespace(handle_request=fake_handle_request),
-    ), patch(
-        "pr_agent.cli.litellm_callbacks_registered", return_value=False,
     ), patch(
         "pr_agent.cli.inject_artifact_context", return_value=None,
     ):

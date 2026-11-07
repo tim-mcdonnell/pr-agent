@@ -40,7 +40,6 @@ def restore_cli_settings():
 def _run_with_result(monkeypatch, result, *, propagate_tool_errors, recorded_failure=False):
     fake_settings = SimpleNamespace(
         config={"propagate_tool_errors": propagate_tool_errors},
-        litellm={},
         set=MagicMock(),
     )
 
@@ -51,7 +50,6 @@ def _run_with_result(monkeypatch, result, *, propagate_tool_errors, recorded_fai
         return result
 
     monkeypatch.setattr(cli, "get_settings", lambda: fake_settings)
-    monkeypatch.setattr(cli, "litellm_callbacks_registered", lambda: False)
     monkeypatch.setattr(
         cli,
         "PRAgent",
@@ -125,7 +123,6 @@ def test_run_does_not_inherit_caller_or_previous_command_failure(monkeypatch):
 def test_run_reads_effective_setting_after_dispatch(monkeypatch):
     fake_settings = SimpleNamespace(
         config={"propagate_tool_errors": False},
-        litellm={},
         set=MagicMock(),
     )
 
@@ -140,40 +137,8 @@ def test_run_reads_effective_setting_after_dispatch(monkeypatch):
         lambda: SimpleNamespace(handle_request=fake_handle_request),
     )
     monkeypatch.setattr(cli, "inject_artifact_context", lambda: None)
-    monkeypatch.setattr(cli, "litellm_callbacks_registered", lambda: False)
 
     assert cli.run(inargs=["--pr_url=https://example.com/org/repo/pull/1", "review"]) == 1
-
-
-def test_run_drains_callbacks_before_returning_failure_status(monkeypatch):
-    events = []
-    fake_settings = SimpleNamespace(
-        config={"propagate_tool_errors": True},
-        litellm={},
-        set=MagicMock(),
-    )
-
-    async def fake_handle_request(*_args, **_kwargs):
-        events.append("request")
-        return False
-
-    async def fake_drain(*_args, **_kwargs):
-        events.append("drain")
-
-    monkeypatch.setattr(cli, "get_settings", lambda: fake_settings)
-    monkeypatch.setattr(
-        cli,
-        "PRAgent",
-        lambda: SimpleNamespace(handle_request=fake_handle_request),
-    )
-    monkeypatch.setattr(cli, "inject_artifact_context", lambda: None)
-    monkeypatch.setattr(cli, "litellm_callbacks_registered", lambda: True)
-    monkeypatch.setattr(cli, "drain_litellm_callbacks", fake_drain)
-
-    status = cli.run(inargs=["--pr_url=https://example.com/org/repo/pull/1", "review"])
-
-    events.append(f"status:{status}")
-    assert events == ["request", "drain", "status:1"]
 
 
 @pytest.mark.parametrize(
@@ -212,9 +177,6 @@ def test_real_request_failure_uses_effective_propagation_setting(
                 return
             raise RuntimeError("controlled tool failure")
 
-    async def fake_drain(*_args, **_kwargs):
-        events.append("callbacks")
-
     def fake_apply_repo_settings(*_args, **_kwargs):
         get_settings().set("CONFIG.PROPAGATE_TOOL_ERRORS", repo_value)
 
@@ -223,8 +185,6 @@ def test_real_request_failure_uses_effective_propagation_setting(
     monkeypatch.setattr(pr_agent_module, "apply_repo_settings", fake_apply_repo_settings)
     monkeypatch.setattr(pr_agent_module, "flush_telemetry", lambda: events.append("telemetry"))
     monkeypatch.setattr(cli, "inject_artifact_context", lambda: None)
-    monkeypatch.setattr(cli, "litellm_callbacks_registered", lambda: True)
-    monkeypatch.setattr(cli, "drain_litellm_callbacks", fake_drain)
 
     inargs = [
         "--pr_url=https://example.com/org/repo/pull/1",
@@ -239,7 +199,6 @@ def test_real_request_failure_uses_effective_propagation_setting(
     assert events == [
         "tool",
         "telemetry",
-        "callbacks",
         f"status:{expected_status}",
     ]
 
@@ -294,7 +253,6 @@ def test_run_restores_propagation_setting_between_invocations(
     monkeypatch.setattr(pr_agent_module, "apply_repo_settings", fake_apply_repo_settings)
     monkeypatch.setattr(pr_agent_module, "flush_telemetry", lambda: None)
     monkeypatch.setattr(cli, "inject_artifact_context", lambda: None)
-    monkeypatch.setattr(cli, "litellm_callbacks_registered", lambda: False)
 
     first_inargs = ["--pr_url=https://example.com/org/repo/pull/1", "review"]
     if override_source == "command":
@@ -310,16 +268,13 @@ def test_run_restores_propagation_setting_between_invocations(
     assert settings.config.get("propagate_tool_errors") is baseline
 
 
-def test_run_restores_propagation_setting_when_callback_drain_raises(monkeypatch):
+def test_run_restores_propagation_setting_when_dispatch_raises(monkeypatch):
     settings = get_settings()
     settings.set("CONFIG.PROPAGATE_TOOL_ERRORS", False)
 
     async def fake_handle_request(*_args, **_kwargs):
         get_settings().set("CONFIG.PROPAGATE_TOOL_ERRORS", True)
-        return False
-
-    async def failing_drain(*_args, **_kwargs):
-        raise RuntimeError("controlled callback failure")
+        raise RuntimeError("controlled dispatch failure")
 
     monkeypatch.setattr(
         cli,
@@ -327,10 +282,8 @@ def test_run_restores_propagation_setting_when_callback_drain_raises(monkeypatch
         lambda: SimpleNamespace(handle_request=fake_handle_request),
     )
     monkeypatch.setattr(cli, "inject_artifact_context", lambda: None)
-    monkeypatch.setattr(cli, "litellm_callbacks_registered", lambda: True)
-    monkeypatch.setattr(cli, "drain_litellm_callbacks", failing_drain)
 
-    with pytest.raises(RuntimeError, match="controlled callback failure"):
+    with pytest.raises(RuntimeError, match="controlled dispatch failure"):
         cli.run(inargs=["--pr_url=https://example.com/org/repo/pull/1", "review"])
 
     assert settings.config.get("propagate_tool_errors") is False
@@ -371,7 +324,6 @@ def test_run_scopes_settings_and_target_caches_between_invocations(monkeypatch):
         context_before = context.copy()
         monkeypatch.setattr(cli, "PRAgent", RecordingAgent)
         monkeypatch.setattr(cli, "inject_artifact_context", lambda: None)
-        monkeypatch.setattr(cli, "litellm_callbacks_registered", lambda: False)
         monkeypatch.setattr("sys.stdin", io.StringIO("diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-a\n+b\n"))
 
         cli.run(inargs=["--pr_url=https://github.com/example/repo/pull/0", "review"])
@@ -420,7 +372,6 @@ def test_run_restores_outer_context_when_dispatch_raises(monkeypatch, raised):
         context_before = context.copy()
         monkeypatch.setattr(cli, "PRAgent", FailingAgent)
         monkeypatch.setattr(cli, "inject_artifact_context", lambda: None)
-        monkeypatch.setattr(cli, "litellm_callbacks_registered", lambda: False)
 
         with pytest.raises(raised, match="controlled dispatch failure"):
             cli.run(inargs=["--pr_url=https://github.com/example/repo/pull/1", "review"])

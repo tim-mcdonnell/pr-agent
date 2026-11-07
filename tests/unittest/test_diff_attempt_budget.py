@@ -5,21 +5,21 @@ import pytest
 
 import pr_agent.algo.pr_processing as pr_processing
 import pr_agent.algo.token_budget as token_budget_module
-from pr_agent.algo.token_handler import TokenEncoder, TokenHandler
+from pr_agent.algo.token_handler import TokenHandler
 from pr_agent.algo.types import EDIT_TYPE, FilePatchInfo
 from pr_agent.algo.utils import ModelType
 from pr_agent.config_loader import get_settings
 from tests.unittest._settings_helpers import restore_settings, snapshot_settings
 
 
-class TaggedEncoder:
-    def __init__(self, model, events):
-        self.model = model
-        self.events = events
+def _tagged_count(handler, text, events):
+    """Count words, doubled for the fallback model, and record which bound handler counted the text.
 
-    def encode(self, text, disallowed_special=()):
-        self.events.append((self.model, text))
-        return list(range(len(text.split()) * (2 if self.model == "fallback-model" else 1)))
+    Every model shares one estimate in production; a model-dependent fake proves each attempt counts
+    with the handler bound to its own model rather than the source handler.
+    """
+    events.append((handler.model, text))
+    return len(text.split()) * (2 if handler.model == "fallback-model" else 1)
 
 
 class Provider:
@@ -54,9 +54,18 @@ def attempt_context(monkeypatch):
     for key, value in values.items():
         get_settings().set(key, value)
     events = []
-    monkeypatch.setattr(TokenEncoder, "_encoder_instance", None)
-    monkeypatch.setattr(TokenEncoder, "_model", None)
-    monkeypatch.setattr(TokenEncoder, "_create_encoder", staticmethod(lambda model: TaggedEncoder(model, events)))
+    monkeypatch.setattr(
+        TokenHandler, "count_tokens",
+        lambda self, text, force_accurate=False: _tagged_count(self, text, events),
+    )
+
+    def prompt_tokens(self, pr, encoder, variables, system, user):
+        return sum(
+            _tagged_count(self, template.replace("{{ title }}", variables["title"]), events)
+            for template in (system, user)
+        )
+
+    monkeypatch.setattr(TokenHandler, "_get_system_user_tokens", prompt_tokens)
     monkeypatch.setattr(pr_processing, "sort_files_by_main_languages", lambda _languages, files: [{"files": files}])
     monkeypatch.setattr(token_budget_module, "get_max_tokens", lambda model, **kwargs: 2_000)
     handler = TokenHandler(SimpleNamespace(title="PR"), {"title": "PR"}, "System {{ title }}", "User {{ title }}")
@@ -90,7 +99,6 @@ def test_public_packers_bind_the_attempt_before_prompt_and_diff_counting(monkeyp
     assert any(text == "System PR" for model, text in events)
     assert any("+new" in text for model, text in events)
     assert source.model == get_settings().config.model == "primary-model"
-    assert TokenEncoder._model == "primary-model"
 
 
 @pytest.mark.parametrize("name", ["get_pr_diff", "get_pr_diff_multiple_patchs"])

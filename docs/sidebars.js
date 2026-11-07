@@ -62,6 +62,7 @@ const sidebars = {
       items: [
         {type: 'doc', id: 'usage-guide/configuration_options', label: 'Configuration file'},
         {type: 'doc', id: 'usage-guide/changing_a_model', label: 'Changing a model'},
+        {type: 'doc', id: 'usage-guide/claude_agent_sdk', label: 'Claude Code integration'},
         {type: 'doc', id: 'usage-guide/additional_configurations', label: 'Additional configurations'},
         {type: 'doc', id: 'usage-guide/custom_ca_and_self_signed_certificates', label: 'Custom CA certificates'},
         {type: 'doc', id: 'usage-guide/configuration_reference', label: 'Configuration reference'},

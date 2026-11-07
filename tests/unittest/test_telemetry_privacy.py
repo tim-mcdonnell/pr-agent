@@ -15,14 +15,13 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from httpx import Request
-from openai import APIConnectionError
 from opentelemetry.trace import StatusCode
 from starlette_context import request_cycle_context
 
 import pr_agent.agent.pr_agent as pr_agent_module
 from pr_agent.agent.pr_agent import PRAgent
 from pr_agent.algo.run_details import command_failed
+from pr_agent.algo.token_budget import FallbackEligibleError
 from pr_agent.config_loader import get_settings
 from tests.unittest._settings_helpers import restore_settings, snapshot_settings
 from tests.unittest._telemetry_helpers import build_in_memory_tracer
@@ -145,8 +144,8 @@ async def test_recorded_review_failure_marks_span_and_next_review_starts_clean(
     settings = copy.deepcopy(get_settings())
     for key, value in {
         "config.git_provider": "plain-diff",
-        "config.model": "gpt-4o",
-        "config.fallback_models": ["gpt-4o-mini"],
+        "config.model": "opus",
+        "config.fallback_models": ["sonnet"],
         "config.use_repo_settings_file": False,
         "config.extra_config_url": None,
         "config.propagate_tool_errors": False,
@@ -176,7 +175,7 @@ async def test_recorded_review_failure_marks_span_and_next_review_starts_clean(
     for failed, filename in [(True, "app.py"), (False, follow_up_filename)]:
         ai = SimpleNamespace()
         ai.chat_completion = AsyncMock(
-            side_effect=APIConnectionError(request=Request("POST", SENTINEL_URL)) if failed else None,
+            side_effect=FallbackEligibleError(f"Claude Code failed for {SENTINEL_URL}") if failed else None,
             return_value=response,
         )
         settings.set("plain_diff.content", diff.replace("app.py", filename))
@@ -186,8 +185,8 @@ async def test_recorded_review_failure_marks_span_and_next_review_starts_clean(
 
         assert handled is True
         assert command_failed() is failed
-        expected_models = ["gpt-4o", "gpt-4o-mini"] if failed else (
-            ["gpt-4o"] if filename == "app.py" else []
+        expected_models = ["opus", "sonnet"] if failed else (
+            ["opus"] if filename == "app.py" else []
         )
         assert [call.kwargs["model"] for call in ai.chat_completion.await_args_list] == expected_models
         for call in ai.chat_completion.await_args_list:

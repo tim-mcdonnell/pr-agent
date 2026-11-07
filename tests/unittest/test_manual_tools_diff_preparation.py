@@ -31,7 +31,7 @@ async def test_run_prepares_diff_with_request_settings(monkeypatch, module, tool
     get_settings().get("config.model")
     settings = copy.deepcopy(get_settings())
     for key, value in {
-        "config.model": "gpt-4o", "config.model_weak": "gpt-4o", "config.fallback_models": [],
+        "config.model": "opus", "config.model_weak": "opus", "config.fallback_models": [],
         "config.publish_output": False, "config.propagate_tool_errors": True,
         "model_routing.enable": False, "skills.enabled": False,
         "pr_update_changelog.push_changelog_changes": False,

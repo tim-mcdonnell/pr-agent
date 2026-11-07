@@ -250,12 +250,10 @@ GPT6_MODELS_WITHOUT_NONE_EFFORT = ('gpt-6-astra', 'gpt-6.1-sol')
 GPT6_MAX_INPUT_TOKENS = {"gpt-6-sol": 922000, "gpt-6-luna": 922000, "gpt-6.1-sol": 922000}
 
 
-# MAX_TOKENS holds only entries that deliberately deviate from (or are absent
-# from) LiteLLM's model registry. Exact LiteLLM duplicates were removed because
-# get_max_tokens() already falls back to litellm.get_model_info() with the same
-# value; generator-expanded Claude families (see _CLAUDE_MODEL_FAMILIES) remain
-# because they also drive the extended-thinking registry and their 1M-context
-# handling is a separate, deliberate judgement (issue #3196).
+# MAX_TOKENS gives the context window get_max_tokens() budgets against. Only the generator-expanded
+# Claude families (see _CLAUDE_MODEL_FAMILIES) matter now that every call runs through Claude Code;
+# a model missing here needs config.custom_model_max_tokens. The non-Claude entries are inherited
+# from upstream and unused.
 MAX_TOKENS = {
     'text-embedding-ada-002': 8192,
     'gpt-3.5-turbo': 16000,
@@ -361,50 +359,23 @@ MAX_TOKENS = {
 }
 
 
-OPENROUTER_ROUTER_MODEL_ALIASES = {
-    "openrouter/auto": "openrouter/openrouter/auto",
-    "openrouter/free": "openrouter/openrouter/free",
-    "openrouter/fusion": "openrouter/openrouter/fusion",
-    "openrouter/pareto-code": "openrouter/openrouter/pareto-code",
+# Claude Code model aliases and the model each selects on the Anthropic API, for token budgeting.
+# Claude Code itself resolves the alias; a "[1m]" suffix only selects the 1M-context variant.
+CLAUDE_CODE_MODEL_ALIASES = {
+    "default": "claude-opus-5-5",
+    "opus": "claude-opus-5-5",
+    "sonnet": "claude-sonnet-5-5",
+    "haiku": "claude-haiku-5-5",
+    "fable": "claude-fable-5-1",
+    "best": "claude-fable-5-1",
 }
 
 
-def normalize_litellm_model(model: str, custom_llm_provider: str = "") -> str:
-    if custom_llm_provider.strip().lower() not in ("", "openrouter"):
+def resolve_claude_code_alias(model):
+    """Return the Claude model id a Claude Code slug selects, e.g. 'opus' or 'sonnet[1m]'."""
+    if not isinstance(model, str):
         return model
-    return OPENROUTER_ROUTER_MODEL_ALIASES.get(model, model)
-
-
-USER_MESSAGE_ONLY_MODELS = [
-    "deepseek/deepseek-reasoner",
-    "o1-mini",
-    "o1-mini-2024-09-12",
-]
-
-# Clamp OpenAI-only levels for always-on Grok reasoning; allow xhigh on 4.6+.
-GROK_REASONING_EFFORT_LEVELS = {
-    "grok-4.5": {"low", "medium", "high"},
-    "grok-4.5-latest": {"low", "medium", "high"},
-    "grok-build-latest": {"low", "medium", "high"},
-    "grok-4.6": {"low", "medium", "high", "xhigh"},
-    # 4.3 mirrors 4.5 and does not support xhigh.
-    "grok-4.3": {"low", "medium", "high"},
-    "grok-4.3-latest": {"low", "medium", "high"},
-}
-
-# Claude models that support "extended thinking" through the manual
-# thinking={"type": "enabled", "budget_tokens": ...} request built by
-# LiteLLMAIHandler._configure_claude_extended_thinking(). Only models that
-# accept budget_tokens belong here. Adaptive-only models (Claude Opus 4.7/4.8,
-# Opus 5/5.5, Sonnet 5/5.5, Haiku 5.5, Fable 5, Fable 5.1) reject budget_tokens with an HTTP 400 and must not be added
-# without also adding an adaptive-thinking code path. This list is the built-in
-# default; it can be replaced via the `claude_extended_thinking_models_override`
-# configuration option.
-#
-# Generated from _CLAUDE_MODEL_FAMILIES:
-CLAUDE_EXTENDED_THINKING_MODELS = list(_claude_extended_thinking)
-
-# Models that require streaming mode
-STREAMING_REQUIRED_MODELS = [
-    "openai/qwq-plus"
-]
+    name = model.strip().removeprefix("anthropic/").removesuffix("[1m]")
+    if name in CLAUDE_CODE_MODEL_ALIASES:
+        return CLAUDE_CODE_MODEL_ALIASES[name]
+    return name if name.startswith("claude-") else model

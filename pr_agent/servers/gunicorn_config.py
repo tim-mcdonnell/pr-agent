@@ -71,7 +71,7 @@ backlog = 2048
 #       A positive integer. Generally set in the 1-5 seconds range.
 #
 
-# Each worker imports the full pr_agent graph (litellm alone is ~150MB), so the worker
+# Each worker imports the full pr_agent graph and each model call starts a Claude Code process, so the worker
 # count is the dominant term in the server's memory footprint. Two things kept the old
 # `cpu_count() * 2 + 1` default from being safe in a container:
 #   - `multiprocessing.cpu_count()` reports the *host's* cores, ignoring the cgroup CPU

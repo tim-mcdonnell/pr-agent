@@ -4,7 +4,7 @@ from functools import partial
 from urllib.parse import urlparse
 
 from pr_agent.algo.ai_handlers.base_ai_handler import BaseAiHandler
-from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
+from pr_agent.algo.ai_handlers.claude_agent_sdk_handler import ClaudeAgentSDKHandler
 from pr_agent.algo.artifacts import get_artifact_context
 from pr_agent.algo.comment_identity import format_pr_questions_header
 from pr_agent.algo.pr_processing import (
@@ -41,7 +41,7 @@ def _sanitize_slash_commands(text: str) -> str:
 
 
 class PRQuestions:
-    def __init__(self, pr_url: str, args=None, ai_handler: partial[BaseAiHandler,] = LiteLLMAIHandler):
+    def __init__(self, pr_url: str, args=None, ai_handler: partial[BaseAiHandler,] = ClaudeAgentSDKHandler):
         question_str = self.parse_args(args)
         self.pr_url = pr_url
         self.git_provider = get_git_provider_for_tool(pr_url)

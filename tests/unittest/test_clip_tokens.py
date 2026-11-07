@@ -25,11 +25,13 @@ class TestClipTokens:
         # Mock the token encoder to return exact limit
         with patch.object(TokenEncoder, 'get_token_encoder') as mock_encoder:
             mock_tokenizer = MagicMock()
-            mock_tokenizer.encode.return_value = [1] * 10  # Exactly 10 tokens
+            mock_tokenizer.encode.return_value = [1] * 10  # 10 o200k tokens, estimated as 17 Claude tokens
             mock_encoder.return_value = mock_tokenizer
 
-            result = clip_tokens(text, 10)
+            result = clip_tokens(text, 17)
             assert result == text
+            # The raw count alone would fit, but the Claude estimate does not.
+            assert clip_tokens(text, 16).endswith("\n...(truncated)")
 
     def test_text_over_token_limit_with_three_dots(self):
         """Test text over token limit with three dots addition."""
@@ -302,11 +304,12 @@ class TestClipTokens:
     def test_clip_original_functionality(self):
         """Test original functionality from the existing test."""
         text = "line1\nline2\nline3\nline4\nline5\nline6"
-        max_tokens = 25
+        # 17 o200k tokens, estimated as ceil(17 * 1.7) = 29 Claude tokens with the default factor.
+        max_tokens = 30
         result = clip_tokens(text, max_tokens)
         assert result == text
 
-        max_tokens = 10
+        max_tokens = 17
         result = clip_tokens(text, max_tokens)
         expected_results = 'line1\nline2\nline3\n\n...(truncated)'
         assert result == expected_results

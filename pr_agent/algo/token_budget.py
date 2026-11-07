@@ -13,8 +13,9 @@ from pr_agent.algo import (
     GPT6_OPENROUTER_ROUTING_SUFFIXES,
     GPT6_SOL_TIER_MODELS,
     MAX_TOKENS,
+    resolve_claude_code_alias,
 )
-from pr_agent.algo.token_handler import TokenEncoder, TokenHandler
+from pr_agent.algo.token_handler import TokenHandler, estimate_tokens
 from pr_agent.config_loader import get_settings
 from pr_agent.log import get_logger
 
@@ -50,9 +51,7 @@ def _as_int(value, default: int = 0) -> int:
 
 def _gpt6_budget_model(model: str, settings) -> tuple[str, bool]:
     """Resolve a GPT-6 budget alias and identify its native provider route."""
-    custom_llm_provider = str(
-        getattr(getattr(settings, "litellm", None), "custom_llm_provider", "") or ""
-    ).strip().lower()
+    custom_llm_provider = ""
     openrouter_route = custom_llm_provider == "openrouter" or (
         not custom_llm_provider and model.startswith("openrouter/")
     )
@@ -87,8 +86,9 @@ def get_max_tokens(model, ignore_max_model_tokens=False):
     (2) If the model is in './pr_agent/algo/__init__.py', use the value from there.
     (3) else if 'config.custom_model_max_tokens' is set to a positive value, use it.
     (4) Resolve a supported GPT-5.x/GPT-6 alias to its registered base-model value.
-    (5) else, query LiteLLM for provider-qualified and bare alias bases before the original model.
-    (6) else, raise an error.
+    (5) else, raise an error.
+
+    Claude Code model aliases such as 'opus' or 'sonnet[1m]' are first resolved to the model they select.
 
     For all cases, we further limit the number of tokens to 'config.max_model_tokens' if it is set.
     This aims to improve the algorithmic quality, as the AI model degrades in performance when the input is too long.
@@ -96,6 +96,7 @@ def get_max_tokens(model, ignore_max_model_tokens=False):
     raw model context size rather than the conservative clamp.
     """
     settings = get_settings()
+    model = resolve_claude_code_alias(model)
     custom_max_tokens = _as_int(settings.config.custom_model_max_tokens)
     model_base, native_gpt6_route = _gpt6_budget_model(model, settings)
     # Resolve supported aliases while preserving custom limits on non-native routes.
@@ -104,27 +105,14 @@ def get_max_tokens(model, ignore_max_model_tokens=False):
         and (model_base == "gpt-6-astra" or native_gpt6_route)
     ):
         model = model_base
-    # Normalize GPT-5.x _thinking aliases before token-limit lookup to match
-    # LiteLLMAIHandler request normalization.
+    # Normalize GPT-5.x _thinking aliases before token-limit lookup.
     model_for_max_tokens = model
-    litellm_lookup_models = (model,)
     if isinstance(model, str):
         tmp = model
         while tmp.startswith(("openai/", "azure/")):
             tmp = tmp.removeprefix("openai/").removeprefix("azure/")
         if tmp.startswith("gpt-5") and "_thinking" in tmp:
             model_for_max_tokens = tmp.replace("_thinking", "")
-            settings_get = getattr(settings, "get", None)
-            azure_mode = callable(settings_get) and (
-                settings_get("OPENAI.API_TYPE", None) == "azure"
-                or bool(settings_get("AZURE_AD.CLIENT_ID", None))
-            )
-            if azure_mode or model.startswith("azure/"):
-                provider_prefix = "azure/"
-            else:
-                provider_prefix = "openai/"
-            provider_model = provider_prefix + model_for_max_tokens
-            litellm_lookup_models = tuple(dict.fromkeys((provider_model, model_for_max_tokens, model)))
     if model in GPT6_MAX_INPUT_TOKENS and not native_gpt6_route and custom_max_tokens > 0:
         max_tokens_model = custom_max_tokens
     elif model in MAX_TOKENS:
@@ -134,38 +122,13 @@ def get_max_tokens(model, ignore_max_model_tokens=False):
     elif model_for_max_tokens in MAX_TOKENS:
         max_tokens_model = MAX_TOKENS[model_for_max_tokens]
     else:
-        # Fallback: ask LiteLLM for the model's metadata before giving up.
-        max_tokens_model = 0
-        import litellm
-        # Try provider-qualified and bare bases before the raw alias.
-        for lookup_model in litellm_lookup_models:
-            try:
-                model_info = litellm.get_model_info(lookup_model)
-            except Exception:
-                get_logger().debug(f"litellm.get_model_info could not resolve model '{lookup_model}'")
-                model_info = None
-            if model_info:
-                litellm_max = model_info.get("max_input_tokens")
-                try:
-                    parsed_max_tokens = int(litellm_max)
-                except (TypeError, ValueError, OverflowError):
-                    continue
-                if parsed_max_tokens > 0:
-                    max_tokens_model = parsed_max_tokens
-                    get_logger().debug(
-                        f"Resolved max_input_tokens for '{model}' from litellm "
-                        f"(lookup '{lookup_model}'): {max_tokens_model}"
-                    )
-                    break
-
-        if max_tokens_model <= 0:
-            message = (
-                f"Unable to resolve a positive input-token limit for model '{model}' from PR-Agent's built-in limits"
-                " or LiteLLM metadata. Set config.custom_model_max_tokens to a verified positive input-token limit."
-                " config.max_model_tokens only caps a resolved limit; it cannot supply a missing model limit."
-            )
-            get_logger().error(message)
-            raise Exception(message)
+        message = (
+            f"Unable to resolve a positive input-token limit for model '{model}' from PR-Agent's built-in limits."
+            " Set config.custom_model_max_tokens to a verified positive input-token limit."
+            " config.max_model_tokens only caps a resolved limit; it cannot supply a missing model limit."
+        )
+        get_logger().error(message)
+        raise Exception(message)
 
     max_model_tokens = _as_int(settings.config.max_model_tokens) if settings.config.max_model_tokens else 0
     if max_model_tokens > 0 and not ignore_max_model_tokens:
@@ -190,7 +153,7 @@ def clip_tokens(text: str, max_tokens: int, add_three_dots=True, num_input_token
                                        Defaults to True.
         num_input_tokens (int, optional): Pre-computed number of tokens in the input text.
                                         If provided, skips token encoding step for efficiency.
-                                        If None, tokens will be counted using TokenEncoder.
+                                        If None, tokens are estimated with estimate_tokens().
                                         Defaults to None.
         delete_last_line (bool, optional): Whether to remove the last line from the
                                          clipped content before adding truncation indicator.
@@ -253,8 +216,7 @@ def clip_tokens(text: str, max_tokens: int, add_three_dots=True, num_input_token
 
     try:
         if num_input_tokens is None:
-            encoder = TokenEncoder.get_token_encoder()
-            num_input_tokens = len(encoder.encode(text, disallowed_special=()))
+            num_input_tokens = estimate_tokens(text)
         if num_input_tokens <= max_tokens:
             return text
 

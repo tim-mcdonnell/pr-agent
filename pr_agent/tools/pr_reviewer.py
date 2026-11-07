@@ -7,7 +7,7 @@ from functools import partial
 from pydantic import ValidationError
 
 from pr_agent.algo.ai_handlers.base_ai_handler import BaseAiHandler
-from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
+from pr_agent.algo.ai_handlers.claude_agent_sdk_handler import ClaudeAgentSDKHandler
 from pr_agent.algo.artifacts import get_artifact_context, prompt_boundary_markers, resolve_artifact_path
 from pr_agent.algo.comment_identity import (
     PRReviewHeader,
@@ -193,7 +193,7 @@ class PRReviewer:
     partial_files_list = ()
 
     def __init__(self, pr_url: str, is_answer: bool = False, is_auto: bool = False, args: list = None,
-                 ai_handler: partial[BaseAiHandler,] = LiteLLMAIHandler):
+                 ai_handler: partial[BaseAiHandler,] = ClaudeAgentSDKHandler):
         """
         Initialize the PRReviewer object with the necessary attributes and objects to review a pull request.
 

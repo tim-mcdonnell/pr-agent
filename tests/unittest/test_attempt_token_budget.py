@@ -2,13 +2,11 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-import litellm
 import pytest
 
 import pr_agent.algo.token_budget as token_budget_module
 import pr_agent.algo.token_handler as token_handler_module
-from pr_agent.algo.ai_handlers.langchain_ai_handler import LangChainOpenAIHandler
-from pr_agent.algo.ai_handlers.openai_ai_handler import OpenAIHandler
+from pr_agent.algo.ai_handlers.claude_agent_sdk_handler import ClaudeAgentSDKHandler
 
 
 class FakeTokenHandler:
@@ -26,12 +24,6 @@ def test_unresolved_model_attempt_requires_explicit_input_limit(monkeypatch, cus
     settings = SimpleNamespace(config=SimpleNamespace(custom_model_max_tokens=custom_limit, max_model_tokens=32000))
     monkeypatch.setattr(token_budget_module, "get_settings", lambda: settings)
 
-    def unavailable_metadata(*_args):
-        if custom_limit:
-            pytest.fail("Explicit input limit must bypass metadata lookup")
-        raise ValueError("Model metadata unavailable")
-
-    monkeypatch.setattr(litellm, "get_model_info", unavailable_metadata)
     if not custom_limit:
         with pytest.raises(Exception, match="custom_model_max_tokens"):
             token_budget_module.AttemptTokenBudget.for_attempt("openrouter/unmapped-model", FakeTokenHandler())
@@ -47,8 +39,6 @@ def token_settings(monkeypatch):
         get=lambda key, default=None: {
             "config.model_token_count_estimate_factor": 0,
             "config.image_input_token_allowance": 4096,
-            "openai.key": "test-key",
-            "anthropic.key": None,
         }.get(key, default),
     )
     monkeypatch.setattr(token_handler_module, "get_settings", lambda use_context=True: settings)
@@ -198,20 +188,16 @@ def test_input_token_limit_uses_attempt_reserve_and_extra_headroom(monkeypatch):
 
 
 @pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"])
-@pytest.mark.parametrize(("prefix", "suffix", "provider"), [
-    ("", "", ""), ("openai/", "_thinking", ""), ("azure/openai/", "_thinking", ""),
-    ("azure_ai/", "_thinking", ""), ("openrouter/openai/", "_thinking:nitro", ""),
-    ("aiohttp_openai/", "_thinking", ""),
-    ("", "_thinking:online", "openrouter"), ("", "", "aiohttp_openai"),
+@pytest.mark.parametrize(("prefix", "suffix"), [
+    ("", ""), ("openai/", "_thinking"), ("azure/openai/", "_thinking"),
+    ("azure_ai/", "_thinking"), ("openrouter/openai/", "_thinking:nitro"),
+    ("aiohttp_openai/", "_thinking"),
 ])
 @pytest.mark.parametrize("output_reserve, expected", [(4096, 922000), (128000, 922000), (200000, 850000)])
 def test_native_gpt6_input_ceiling_is_independent_of_output_reserve(
-    monkeypatch, model, prefix, suffix, provider, output_reserve, expected
+    monkeypatch, model, prefix, suffix, output_reserve, expected
 ):
-    settings = SimpleNamespace(
-        config=SimpleNamespace(custom_model_max_tokens=0, max_model_tokens=0),
-        litellm=SimpleNamespace(custom_llm_provider=provider),
-    )
+    settings = SimpleNamespace(config=SimpleNamespace(custom_model_max_tokens=0, max_model_tokens=0))
     monkeypatch.setattr(token_budget_module, "get_settings", lambda: settings)
     budget = token_budget_module.AttemptTokenBudget.for_attempt(
         f"{prefix}{model}{suffix}", FakeTokenHandler(prompt_tokens=100),
@@ -228,10 +214,7 @@ def test_native_gpt6_input_ceiling_is_independent_of_output_reserve(
 
 @pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"])
 def test_gpt6_input_ceiling_applies_with_global_cap_bypass(monkeypatch, model):
-    settings = SimpleNamespace(
-        config=SimpleNamespace(custom_model_max_tokens=0, max_model_tokens=32000),
-        litellm=SimpleNamespace(custom_llm_provider="openai"),
-    )
+    settings = SimpleNamespace(config=SimpleNamespace(custom_model_max_tokens=0, max_model_tokens=32000))
     monkeypatch.setattr(token_budget_module, "get_settings", lambda: settings)
     budget = token_budget_module.AttemptTokenBudget.for_attempt(
         model, FakeTokenHandler(), ignore_max_model_tokens=True,
@@ -241,28 +224,13 @@ def test_gpt6_input_ceiling_applies_with_global_cap_bypass(monkeypatch, model):
     assert capped.input_token_limit(4096) == 27904
 
 
-@pytest.mark.parametrize("provider", ["ollama", "openai_like", "azure_text"])
-def test_custom_gpt6_budget_uses_custom_capacity_without_native_input_ceiling(monkeypatch, provider):
-    settings = SimpleNamespace(
-        config=SimpleNamespace(custom_model_max_tokens=16000, max_model_tokens=0),
-        litellm=SimpleNamespace(custom_llm_provider=provider),
-    )
-    monkeypatch.setattr(token_budget_module, "get_settings", lambda: settings)
-    budget = token_budget_module.AttemptTokenBudget.for_attempt("gpt-6-sol", FakeTokenHandler())
-    assert budget.context_window == 16000
-    assert budget.max_input_tokens is None
-    assert budget.input_token_limit(4096) == 11904
-
-
 def test_input_ceiling_is_frozen_and_rejects_required_prompt_at_boundary(monkeypatch):
-    settings = SimpleNamespace(
-        config=SimpleNamespace(custom_model_max_tokens=0, max_model_tokens=0),
-        litellm=SimpleNamespace(custom_llm_provider="openai"),
-    )
+    settings = SimpleNamespace(config=SimpleNamespace(custom_model_max_tokens=0, max_model_tokens=0))
     monkeypatch.setattr(token_budget_module, "get_settings", lambda: settings)
     handler = FakeTokenHandler(prompt_tokens=922000)
     budget = token_budget_module.AttemptTokenBudget.for_attempt("gpt-6-sol", handler)
-    settings.litellm.custom_llm_provider = "ollama"
+    settings.config.custom_model_max_tokens = 16000
+    settings.config.max_model_tokens = 8000
 
     assert budget.max_input_tokens == 922000
     assert budget.available_tokens(4096) == 0
@@ -271,17 +239,13 @@ def test_input_ceiling_is_frozen_and_rejects_required_prompt_at_boundary(monkeyp
 
 
 @pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"])
-@pytest.mark.parametrize("provider, ceiling", [("", 922000), ("aiohttp_openai", 922000), ("ollama", None)])
-def test_aiohttp_prefixed_input_budget_honors_actual_route(monkeypatch, model, provider, ceiling):
-    settings = SimpleNamespace(
-        config=SimpleNamespace(custom_model_max_tokens=1000000, max_model_tokens=0),
-        litellm=SimpleNamespace(custom_llm_provider=provider),
-    )
+def test_aiohttp_prefixed_input_budget_keeps_native_ceiling(monkeypatch, model):
+    settings = SimpleNamespace(config=SimpleNamespace(custom_model_max_tokens=1000000, max_model_tokens=0))
     monkeypatch.setattr(token_budget_module, "get_settings", lambda: settings)
     budget = token_budget_module.AttemptTokenBudget.for_attempt(f"aiohttp_openai/{model}", FakeTokenHandler())
 
-    assert budget.max_input_tokens == ceiling
-    assert budget.input_token_limit(4096) == (ceiling or 995904)
+    assert budget.max_input_tokens == 922000
+    assert budget.input_token_limit(4096) == 922000
 
 
 def test_optional_prompt_fitting_honors_input_ceiling(monkeypatch):
@@ -425,18 +389,13 @@ def test_prepare_request_counts_the_handler_final_message_shape(monkeypatch):
     assert handler.counted == ["system\n\n\nuser"]
 
 
-@pytest.mark.parametrize("handler_class", [OpenAIHandler, LangChainOpenAIHandler])
-def test_prepare_request_counts_text_only_for_handlers_that_ignore_images(
-    monkeypatch,
-    token_settings,
-    handler_class,
-):
+def test_prepare_request_counts_text_only_for_handlers_that_ignore_images(monkeypatch, token_settings):
     handler = FakeTokenHandler()
     budget = token_budget_module.AttemptTokenBudget("attempt-model", handler, handler, 10_000)
     monkeypatch.setattr(token_budget_module, "get_settings", lambda: token_settings)
 
     prepared = budget.prepare_request(
-        handler_class.__new__(handler_class),
+        ClaudeAgentSDKHandler(),
         "system",
         "user",
         image_path="https://example.test/image.png",

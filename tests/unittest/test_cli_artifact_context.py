@@ -15,7 +15,7 @@ from pr_agent.git_providers import utils as git_utils
 def test_run_injects_the_artifact_context_before_handling_the_request():
     """A pipeline that runs the CLI gets the same [artifacts] injection as the GitHub Action."""
     order = []
-    fake_settings = SimpleNamespace(config={}, litellm={}, set=MagicMock())
+    fake_settings = SimpleNamespace(config={}, set=MagicMock())
 
     async def fake_handle_request(*_args, **_kwargs):
         order.append("handle_request")
@@ -23,7 +23,6 @@ def test_run_injects_the_artifact_context_before_handling_the_request():
 
     with patch("pr_agent.cli.get_settings", return_value=fake_settings), \
          patch("pr_agent.cli.inject_artifact_context", side_effect=lambda: order.append("inject")), \
-         patch("pr_agent.cli.litellm_callbacks_registered", return_value=False), \
          patch("pr_agent.cli.PRAgent", return_value=SimpleNamespace(handle_request=fake_handle_request)):
         cli.run(inargs=["--pr_url=https://github.com/a/b/pull/1", "review"])
 
@@ -54,7 +53,6 @@ def test_cli_disabled_ingress_does_not_reuse_a_calling_context_payload(monkeypat
         token = artifacts._artifact_context.set(payload)
         try:
             monkeypatch.setattr(cli, "PRAgent", FakeAgent)
-            monkeypatch.setattr(cli, "litellm_callbacks_registered", lambda: False)
 
             cli.run(inargs=["--pr_url=https://example.com/org/repo/pull/1", "review"])
 
@@ -102,7 +100,6 @@ extra_instructions = "Repository instructions"
     monkeypatch.setattr(git_utils, "get_git_provider_with_context", lambda _url: Provider())
     monkeypatch.setitem(agent_module.command2class, "review", RecordingReviewer)
     monkeypatch.setattr(agent_module, "flush_telemetry", lambda: None)
-    monkeypatch.setattr(cli, "litellm_callbacks_registered", lambda: False)
     read = MagicMock(wraps=artifacts._read_and_truncate)
     monkeypatch.setattr(artifacts, "_read_and_truncate", read)
 
