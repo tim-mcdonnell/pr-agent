@@ -1,0 +1,120 @@
+name: Docker image
+
+# Build the GitHub Action image (docker/Dockerfile, target github_action) that action.yaml runs, and publish it
+# to GHCR as ghcr.io/<owner>/pr-agent:github_action. Pull requests build and smoke-test without pushing.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    paths:
+      - 'docker/Dockerfile'
+      - 'github_action/**'
+      - 'pr_agent/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/docker-image.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-image-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  github-action-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+
+      - name: Compute image tags
+        id: tags
+        shell: bash
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${OWNER,,}/pr-agent"
+          tags="$image:github_action-${GITHUB_SHA::12}"
+          if [[ "$GITHUB_REF" == refs/heads/main ]]; then
+            tags="$tags,$image:github_action"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tags="$tags,$image:github_action-${GITHUB_REF_NAME#v}"
+          fi
+          {
+            echo "image=$image"
+            echo "tags=$tags"
+          } >> "$GITHUB_OUTPUT"
+
+      # Build the runner's platform first and run it, so a broken image is never pushed.
+      - name: Build for smoke test
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: github_action
+          platforms: linux/amd64
+          load: true
+          tags: pr-agent-smoke:github_action
+          cache-from: type=gha,scope=github_action
+          cache-to: type=gha,mode=max,scope=github_action
+
+      - name: Smoke-test the image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --network none --entrypoint python pr-agent-smoke:github_action -c '
+          import importlib.util, subprocess
+          from pr_agent.algo.ai_handlers.claude_agent_sdk_handler import claude_code_cli_path
+          from pr_agent.algo.token_handler import estimate_tokens
+          cli = claude_code_cli_path()
+          assert cli, "bundled Claude Code binary missing"
+          print(subprocess.run([cli, "--version"], check=True, capture_output=True, text=True).stdout.strip())
+          assert estimate_tokens("def f(x):\n    return x\n") > 0, "tiktoken encoding not baked in"
+          assert importlib.util.find_spec("litellm") is None, "litellm must not be installed"
+          '
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6  # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: push
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: github_action
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha,scope=github_action
+          cache-to: type=gha,mode=max,scope=github_action
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        if: github.event_name != 'pull_request'
+        with:
+          subject-name: ${{ steps.tags.outputs.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

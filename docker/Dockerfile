@@ -1,20 +1,15 @@
 FROM python:3.14.9-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8 AS base
 COPY --from=ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff /uv /uvx /bin/
 
-# litellm fetches its model cost map over the network at import time, so a
-# third-party change to that map can change runtime behavior with no image
-# change and no version bump. Use the map bundled with the litellm pinned in
-# uv.lock so every stage (test and runtime) behaves how it was built and tested
-# rather than tracking today's remote data; new models then arrive with a
-# deliberate litellm bump in the lockfile.
-ENV LITELLM_LOCAL_MODEL_COST_MAP=True
-
 RUN apt-get update && apt-get install --no-install-recommends -y git curl && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-install-project --no-dev --extra all
+# Token estimates use tiktoken's o200k_base encoding; fetch it at build time so runs need no download.
+ENV TIKTOKEN_CACHE_DIR=/app/.tiktoken_cache
+RUN /app/.venv/bin/python -c "import tiktoken; tiktoken.get_encoding('o200k_base')"
 # Keep documentation changes from invalidating the dependency layer.
 COPY docs docs
 ENV PATH="/app/.venv/bin:$PATH"
@@ -72,8 +67,6 @@ CMD ["python", "pr_agent/mosaico/server.py"]
 
 
 FROM base AS test
-# The base stage pins LITELLM_LOCAL_MODEL_COST_MAP for every stage; kept here
-# only as documentation that the unit suite keys off the bundled cost map.
 RUN uv sync --frozen --no-install-project --extra all
 COPY pr_agent pr_agent
 COPY tests tests
